@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Local runtime state
+.roxycode/
+.agents/
+.codex/
+
+# Local IDE / assistant state
+.idea/
+.claude/settings.local.json
+.claude/plan/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and temporary files
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.tmp-*/
+tmp/
+temp/
+
+# OS files
+.DS_Store
+Thumbs.db

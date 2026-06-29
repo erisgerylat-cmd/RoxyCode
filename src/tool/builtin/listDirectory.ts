@@ -1,0 +1,48 @@
+﻿import { readdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { Tool } from '../types.js';
+import { formatToolResult } from '../executor/ToolExecutor.js';
+import { okBody, optionalNumberArg, optionalStringArg, resolveToolPath, stringArg } from '../utils/args.js';
+
+export const listDirectoryTool: Tool = {
+  definition: {
+    name: 'list_directory',
+    description: '列出目录内容。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '目录路径。', default: '.' },
+        max_entries: { type: 'number', description: '最多返回条目数。', default: 200 },
+      },
+    },
+  },
+  isReadOnly: true,
+  riskLevel: 'low',
+  getAffectedPaths(args, ctx) {
+    return [resolveToolPath(ctx, optionalStringArg(args, 'path') ?? '.')];
+  },
+  async execute(args, ctx) {
+    const started = Date.now();
+    const path = resolveToolPath(ctx, optionalStringArg(args, 'path') ?? '.');
+    const maxEntries = Math.max(1, optionalNumberArg(args, 'max_entries') ?? 200);
+    const entries = await readdir(path, { withFileTypes: true });
+    const selected = entries.slice(0, maxEntries);
+    const lines = await Promise.all(selected.map(async entry => {
+      const full = join(path, entry.name);
+      const info = await stat(full).catch(() => null);
+      const kind = entry.isDirectory() ? 'dir ' : entry.isFile() ? 'file' : 'node';
+      const size = info?.isFile() ? `${info.size}b` : '';
+      return `${kind.padEnd(4)} ${entry.name}${size ? ` ${size}` : ''}`;
+    }));
+    const body = okBody('列出目录完成', [`path: ${path}`, `entries: ${selected.length}/${entries.length}`, lines.join('\n') || '(empty)']);
+    return {
+      success: true,
+      output: formatToolResult('list_directory', true, body, ctx, { path, entries: selected.length, total: entries.length }),
+      duration: Date.now() - started,
+      metadata: { path, entries: selected.length, total: entries.length, truncated: entries.length > selected.length },
+    };
+  },
+  getAuditSummary(args) {
+    return { path: args.path ?? '.', operation: 'list' };
+  },
+};

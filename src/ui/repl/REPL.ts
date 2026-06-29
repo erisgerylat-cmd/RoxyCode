@@ -1,0 +1,881 @@
+import chalk from 'chalk';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import type { CharacterManager } from '../../aesthetic/character/CharacterManager.js';
+import type { Character } from '../../aesthetic/character/types.js';
+import type { ConfigManager } from '../../core/ConfigManager.js';
+import type { ContextManager } from '../../session/context/ContextManager.js';
+import type { LLMProvider } from '../../core/types/llm.js';
+import { userMessage, type Message } from '../../core/types/message.js';
+import { AgentLoop, normalizeAgentMode, type AgentLoopEvent } from '../../engine/agent/index.js';
+import { createDefaultToolRuntime, getBuiltinTools, type ToolExecutor, type ToolRegistry, type ToolPermissionPrompt } from '../../tool/index.js';
+import { CommandRegistry, getCategoryMeta, type CommandCategory, type SubcommandDefinition } from '../../commands/CommandRegistry.js';
+import { parseCommand } from '../../commands/CommandParser.js';
+import { createBuiltinCommands } from '../../commands/builtin/index.js';
+import { ALL_CHARACTERS, CHARACTER_ORDER } from '../../aesthetic/character/characters/index.js';
+import { EasterEggEngine } from '../easter-eggs/EasterEggEngine.js';
+import { DemonEyeMode } from '../easter-eggs/DemonEyeMode.js';
+import { TelepathyMode } from '../easter-eggs/TelepathyMode.js';
+import { processInput, InputHistory, MultiLineCollector, isEmpty } from './InputHandler.js';
+import { RawLineReader, type KeyEvent } from './RawLineReader.js';
+import { CommandPalette, type PaletteItem } from './CommandPalette.js';
+import { requestPermissionConfirmation } from './PermissionConfirmPanel.js';
+import { APP_VERSION } from '../../core/constants.js';
+import { normalizeLanguage, t, type Language } from '../../i18n/index.js';
+import { InteractionRenderer } from '../renderers/InteractionRenderer.js';
+import { SessionStore } from '../../session/store/SessionStore.js';
+import { AutoMemoryExtractor, MemoryPolicyError, MemoryStore } from '../../session/memory/index.js';
+import { HookLoader, HookManager } from '../../hooks/index.js';
+import { McpConfigLoader, McpToolAdapter } from '../../mcp/index.js';
+import { PluginLoader, collectPluginContributions, createPluginCommands } from '../../plugin/index.js';
+import type { CommandDefinition } from '../../commands/CommandRegistry.js';
+
+export interface REPLOptions {
+  characterManager: CharacterManager;
+  configManager: ConfigManager;
+  contextManager: ContextManager;
+  llmProvider: LLMProvider;
+}
+
+interface LineSubmitOptions { fromPalette?: boolean }
+interface PaletteSelectionOptions { lineAlreadySubmitted?: boolean }
+
+export class REPL {
+  private readonly characterManager: CharacterManager;
+  private readonly configManager: ConfigManager;
+  private readonly contextManager: ContextManager;
+  private readonly llmProvider: LLMProvider;
+  private readonly toolRegistry: ToolRegistry;
+  private readonly toolExecutor: ToolExecutor;
+  private readonly easterEggEngine: EasterEggEngine;
+  private readonly demonEyeMode: DemonEyeMode;
+  private readonly telepathyMode: TelepathyMode;
+  private readonly inputHistory = new InputHistory(500);
+  private readonly multiLineCollector = new MultiLineCollector();
+  private readonly palette = new CommandPalette({ maxVisible: 10 });
+  private readonly interactionRenderer: InteractionRenderer;
+  private readonly hookManager: HookManager;
+  private readonly mcpToolAdapter: McpToolAdapter;
+  private readonly sessionStartTime = Date.now();
+  private sessionStore = new SessionStore(process.cwd());
+  private readonly memoryStore = new MemoryStore({ cwd: process.cwd() });
+
+  private commandRegistry = new CommandRegistry();
+  private extensionCommands: CommandDefinition[] = [];
+  private extensionsLoaded = false;
+  private agentLoop: AgentLoop;
+  private agentMessages: Message[] = [];
+  private reader: RawLineReader | null = null;
+  private conversationTurns = 0;
+  private paletteActive = false;
+  private processing = false;
+  private shutdownRequested = false;
+
+  constructor(options: REPLOptions) {
+    this.characterManager = options.characterManager;
+    this.configManager = options.configManager;
+    this.contextManager = options.contextManager;
+    this.llmProvider = options.llmProvider;
+    const toolRuntime = createDefaultToolRuntime(process.cwd());
+    this.toolRegistry = toolRuntime.registry;
+    this.toolExecutor = toolRuntime.executor;
+    this.hookManager = new HookManager({ hooks: [], llmProvider: this.llmProvider });
+    this.mcpToolAdapter = new McpToolAdapter(process.cwd());
+    this.agentLoop = this.createAgentLoop();
+    this.easterEggEngine = new EasterEggEngine(options.characterManager);
+    this.demonEyeMode = new DemonEyeMode();
+    this.telepathyMode = new TelepathyMode();
+    this.interactionRenderer = new InteractionRenderer(options.characterManager.getCurrentCharacter());
+    this.registerBuiltinCommands();
+    this.syncPaletteItems();
+  }
+
+  async start(): Promise<void> {
+    await this.initializeSession();
+    await this.loadExtensions();
+    if (!process.stdin.isTTY) return this.startFallback({ initialized: true });
+    const character = this.characterManager.getCurrentCharacter();
+    this.reader = new RawLineReader({ prompt: this.getPromptString(character), historyLimit: 500 });
+    this.reader.on('change', (buffer: string) => this.onInputChange(buffer));
+    this.reader.on('key', (event: KeyEvent) => this.onKeyEvent(event));
+    this.reader.on('line', (line: string) => {
+      void this.onLineSubmit(line).catch(err => this.handleLineSubmitError(line, err));
+    });
+    this.reader.on('close', () => this.requestShutdown(0));
+    this.showPrompt();
+    this.reader.start();
+  }
+
+  private async startFallback(options: { initialized?: boolean } = {}): Promise<void> {
+    if (!options.initialized) {
+      await this.initializeSession();
+      await this.loadExtensions();
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const input = Buffer.concat(chunks).toString('utf8').trim();
+    if (!input) return;
+
+    const lines = input.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    if (lines.length > 1 && lines.every(line => line.startsWith('/') && !line.startsWith('//'))) {
+      for (const line of lines) await this.onLineSubmit(line);
+      return;
+    }
+
+    await this.onLineSubmit(input);
+  }
+
+  private registerBuiltinCommands(): void {
+    const commands = createBuiltinCommands({
+      text: this.getText(),
+      getText: () => this.getText(),
+      language: this.getLanguage(),
+      characterManager: this.characterManager,
+      configManager: this.configManager,
+      contextManager: this.contextManager,
+      llmProvider: this.llmProvider,
+      easterEggEngine: this.easterEggEngine,
+      demonEyeMode: this.demonEyeMode,
+      telepathyMode: this.telepathyMode,
+      getCharacterSubcommands: () => this.getCharacterSubcommands(),
+      getHelpSubcommands: () => [],
+      getConversationTurns: () => this.conversationTurns,
+      getSessionElapsedMs: () => Date.now() - this.sessionStartTime,
+      getHistoryCount: () => this.inputHistory.getHistory().length,
+      getCommandCount: () => this.commandRegistry.list().length,
+      showHelp: () => this.showHelp(),
+      showCommandHelp: name => this.showCommandHelp(name),
+      showHistory: () => this.showHistory(),
+      reloadCommands: () => this.reloadCommands(),
+      requestShutdown: code => this.requestShutdown(code),
+      closeReader: () => this.reader?.close(),
+      resumeSession: query => this.resumeSession(query),
+      exportSession: (target, format) => this.exportSession(target, format),
+      rewindSession: count => this.rewindSession(count),
+      compactSession: () => this.compactSession(),
+      getSessionInfo: () => ({ sessionId: this.sessionStore.sessionId, path: this.sessionStore.path }),
+      runAgentPrompt: prompt => this.submitAgentPrompt(prompt),
+    });
+    this.commandRegistry.registerMany(commands);
+  }
+
+  private registerExtensionCommands(): void {
+    if (this.extensionCommands.length === 0) return;
+    this.commandRegistry.registerMany(this.extensionCommands);
+  }
+
+  private syncPaletteItems(): void {
+    this.palette.setItems(this.commandRegistry.list().map(cmd => ({
+      name: cmd.name,
+      description: cmd.description,
+      aliases: cmd.aliases ?? [],
+      category: cmd.category ?? 'basic',
+      hasChildren: !!cmd.subcommands?.length,
+    })));
+  }
+
+  private reloadCommands(): void {
+    this.commandRegistry.clear();
+    this.registerBuiltinCommands();
+    this.registerExtensionCommands();
+    this.syncPaletteItems();
+  }
+
+  private async loadExtensions(): Promise<void> {
+    if (this.extensionsLoaded) return;
+    this.extensionsLoaded = true;
+    const config = this.configManager.snapshot();
+    const pluginResult = await new PluginLoader({ cwd: process.cwd(), config }).load();
+    const contributions = collectPluginContributions(pluginResult.enabled);
+
+    this.extensionCommands = createPluginCommands({
+      commands: contributions.commands,
+      runAgentPrompt: prompt => this.submitAgentPrompt(prompt),
+    });
+    this.reloadCommands();
+
+    const hookResult = await new HookLoader({
+      cwd: process.cwd(),
+      config,
+      pluginHooks: contributions.hooks,
+    }).load();
+    this.hookManager.setHooks(hookResult.hooks);
+
+    this.toolRegistry.clear();
+    this.toolRegistry.registerMany(getBuiltinTools());
+    const mcpResult = await new McpConfigLoader({
+      cwd: process.cwd(),
+      config,
+      pluginServers: contributions.mcpServers,
+    }).load();
+    const mcpTools = await this.mcpToolAdapter.discoverTools(mcpResult.servers);
+    for (const tool of mcpTools.tools) {
+      if (!this.toolRegistry.has(tool.definition.name)) this.toolRegistry.register(tool);
+    }
+
+    await this.sessionStore.append({
+      type: 'note',
+      note: 'extensions loaded',
+      metadata: {
+        plugins: { enabled: pluginResult.enabled.length, disabled: pluginResult.disabled.length, errors: pluginResult.errors },
+        hooks: { count: hookResult.hooks.length, errors: hookResult.errors },
+        mcp: { servers: mcpResult.servers.length, tools: mcpTools.tools.length, errors: [...mcpResult.errors, ...mcpTools.errors] },
+      },
+    }).catch(() => undefined);
+  }
+
+  private getLanguage(): Language {
+    return normalizeLanguage(this.configManager.get('ui.language'));
+  }
+
+  private getText() {
+    return t(this.getLanguage()).commands;
+  }
+
+  private getCharacterSubcommands(): SubcommandDefinition[] {
+    const subs: SubcommandDefinition[] = [];
+    for (const id of CHARACTER_ORDER) {
+      const character = ALL_CHARACTERS.get(id);
+      if (character) subs.push({ name: id, description: `${character.title} - ${character.description}`, label: character.name });
+    }
+    subs.push(
+      { name: 'info', description: this.getLanguage() === 'zh-CN' ? zhText('characterInfo') : 'Show current character details' },
+      { name: 'random', description: this.getLanguage() === 'zh-CN' ? zhText('characterRandom') : 'Choose a random character' },
+    );
+    return subs;
+  }
+
+  private toSubPaletteItems(subs: SubcommandDefinition[]): PaletteItem[] {
+    return subs.map(s => ({
+      name: s.name,
+      description: s.description,
+      aliases: [],
+      category: 'basic' as CommandCategory,
+      hasChildren: s.hasChildren,
+      needsInput: s.needsInput,
+      label: s.label || s.name,
+      icon: s.icon,
+    }));
+  }
+
+  private getHelpPaletteItems(): PaletteItem[] {
+    return this.commandRegistry.list().map(cmd => ({
+      name: cmd.name,
+      description: cmd.description,
+      aliases: cmd.aliases ?? [],
+      category: cmd.category ?? 'basic',
+      label: `/${cmd.name}`,
+    }));
+  }
+
+  private getCompressSubItems(): PaletteItem[] {
+    const isZh = this.getLanguage() === 'zh-CN';
+    return [
+      { name: 'on', description: isZh ? zhText('compressOn') : 'Enable automatic context compression', aliases: [], category: 'basic', label: 'on', icon: '+' },
+      { name: 'off', description: isZh ? zhText('compressOff') : 'Disable automatic context compression', aliases: [], category: 'basic', label: 'off', icon: '-' },
+    ];
+  }
+
+  private async onLineSubmit(line: string, options: LineSubmitOptions = {}): Promise<void> {
+    if (!options.fromPalette && this.paletteActive && this.palette.visible && this.palette.selected) {
+      this.selectPaletteItem({ lineAlreadySubmitted: true });
+      return;
+    }
+
+    this.closePalette();
+    const input = processInput(line);
+    if (isEmpty(input)) {
+      if (!this.shutdownRequested) this.showPrompt();
+      return;
+    }
+
+    this.inputHistory.add(input);
+    this.conversationTurns++;
+    const easterEgg = this.easterEggEngine.checkOnInput(input);
+    if (easterEgg) console.log(chalk.hex(this.characterManager.getCurrentCharacter().theme.accent)(`  "${easterEgg}"`));
+
+    const cmd = parseCommand(input);
+    this.interactionRenderer.updateCharacter(this.characterManager.getCurrentCharacter());
+    this.interactionRenderer.renderUserInput(input, cmd ? 'command' : 'message');
+
+    if (!cmd && this.renderShellConfigurationHint(input)) {
+      await this.sessionStore.append({ type: 'note', note: 'shell configuration hint', metadata: { input } });
+      if (!this.shutdownRequested) this.showPrompt();
+      return;
+    }
+
+    if (cmd) {
+      await this.sessionStore.append({ type: 'command', command: { name: cmd.name, args: cmd.args, raw: input } });
+      await this.runCommand(cmd.name, cmd.args);
+    } else {
+      await this.sessionStore.appendMessage(userMessage(input), 'user');
+      await this.runAgentInput(input);
+    }
+
+    if (!this.shutdownRequested) this.showPrompt();
+  }
+
+  private renderShellConfigurationHint(input: string): boolean {
+    const trimmed = input.trim();
+    const isShellConfig = /^\$env:ROXY_[A-Z0-9_]+\s*=/.test(trimmed)
+      || /^\$env:(OPENAI|QWEN|DASHSCOPE|DEEPSEEK|GLM|BIGMODEL)_[A-Z0-9_]+\s*=/.test(trimmed)
+      || /^pnpm\s+start\b/.test(trimmed)
+      || /^npm\s+run\s+start\b/.test(trimmed);
+    if (!isShellConfig) return false;
+
+    const isZh = this.getLanguage() === 'zh-CN';
+    if (isZh) {
+      console.log(chalk.yellow('  这看起来是 PowerShell/终端命令，不是 RoxyCode 对话命令。'));
+      console.log(chalk.dim('  请先退出 RoxyCode，回到 IDEA 外层终端执行这些命令，然后再启动 RoxyCode。'));
+      console.log(chalk.dim('  示例:'));
+      console.log(chalk.dim('    $env:ROXY_OPENAI_API_KEY="sk-..."'));
+      console.log(chalk.dim('    $env:ROXY_OPENAI_BASE_URL="https://api.mioufun.top/v1"'));
+      console.log(chalk.dim('    pnpm start'));
+    } else {
+      console.log(chalk.yellow('  This looks like a PowerShell/shell command, not a RoxyCode chat command.'));
+      console.log(chalk.dim('  Exit RoxyCode, run it in the outer IDEA terminal, then start RoxyCode again.'));
+    }
+    return true;
+  }
+  private async runCommand(name: string, args: string[]): Promise<void> {
+    this.processing = true;
+    const startedAt = Date.now();
+    let handled = false;
+    let failed = false;
+    try {
+      const hook = await this.hookManager.run('command', {
+        cwd: process.cwd(),
+        sessionId: this.sessionStore.sessionId,
+        language: this.getLanguage(),
+        characterId: this.characterManager.getCurrentCharacter().id,
+        commandName: name,
+        commandArgs: args,
+      });
+      if (hook.blocked) {
+        console.log(chalk.red(`  ${hook.reason ?? 'Command blocked by hook.'}`));
+        handled = true;
+      } else {
+        handled = await this.commandRegistry.execute(name, args, { characterManager: this.characterManager });
+      }
+      this.interactionRenderer.renderCommandResult(name, Date.now() - startedAt, handled);
+    } catch (error) {
+      failed = true;
+      this.interactionRenderer.renderCommandError(name, Date.now() - startedAt, error);
+    } finally {
+      this.processing = false;
+    }
+
+    if (!handled && !failed) {
+      const text = this.getText();
+      console.log(chalk.red(`  ${text.unknownCommand}: /${name}`));
+      console.log(chalk.dim(`  ${text.typeHelp}`));
+    }
+  }
+
+  private createAgentLoop(): AgentLoop {
+    return new AgentLoop({
+      llmProvider: this.llmProvider,
+      contextManager: this.contextManager,
+      toolExecutor: this.toolExecutor,
+      tools: this.toolRegistry.definitions(),
+      config: this.configManager.snapshot(),
+      cwd: process.cwd(),
+      sessionId: this.sessionStore.sessionId,
+      character: this.characterManager.getCurrentCharacter(),
+      language: this.getLanguage(),
+      confirm: prompt => this.confirmToolPrompt(prompt, false),
+      confirmSecond: prompt => this.confirmToolPrompt(prompt, true),
+      hooks: this.hookManager,
+    });
+  }
+
+  private async submitAgentPrompt(input: string): Promise<void> {
+    await this.sessionStore.appendMessage(userMessage(input), 'user');
+    await this.runAgentInput(input);
+  }
+  private async runAgentInput(input: string): Promise<void> {
+    this.processing = true;
+    this.agentLoop = this.createAgentLoop();
+    const mode = normalizeAgentMode(this.configManager.get('mode') as string | undefined);
+    const beforeCount = this.agentMessages.length;
+    try {
+      for await (const event of this.agentLoop.run({ userInput: input, history: this.agentMessages, mode })) {
+        this.renderAgentEvent(event);
+        if (event.type === 'done') {
+          const nextMessages = event.messages.filter(message => message.role !== 'system');
+          const additions = nextMessages.slice(Math.min(nextMessages.length, beforeCount + 1));
+          for (const message of additions) await this.sessionStore.appendMessage(message);
+          this.agentMessages = nextMessages;
+          void this.extractAutoMemories(nextMessages).catch(() => undefined);
+        }
+      }
+    } finally {
+      this.processing = false;
+    }
+  }
+
+  private renderAgentEvent(event: AgentLoopEvent): void {
+    const character = this.characterManager.getCurrentCharacter();
+    const primary = chalk.hex(character.theme.primary);
+    const secondary = chalk.hex(character.theme.secondary);
+    const accent = chalk.hex(character.theme.accent);
+    const success = chalk.hex(character.theme.success);
+    const error = chalk.hex(character.theme.error);
+    const dim = chalk.dim;
+    const zh = this.getLanguage() === 'zh-CN';
+
+    switch (event.type) {
+      case 'mode_start':
+        console.log(primary(`  ${event.label} - ${event.description}`));
+        break;
+      case 'planning':
+        console.log(accent(`\n  ${zh ? zhText('plan') : 'Plan'}`));
+        console.log(indentBlock(event.text));
+        break;
+      case 'text_delta':
+        process.stdout.write(event.text);
+        break;
+      case 'assistant_message':
+        if (event.text.trim() && !event.text.endsWith('\n')) process.stdout.write('\n');
+        break;
+      case 'tool_call_start':
+        console.log(secondary(`\n  ${zh ? zhText('tool') : 'Tool'}: ${event.toolCall.name}`));
+        break;
+      case 'tool_call_delta':
+        break;
+      case 'tool_result':
+        console.log(success(`  ${zh ? zhText('toolResult') : 'Tool result'}: ${event.toolCall.name} ${event.result.success ? 'OK' : 'ERR'} - ${event.result.duration}ms`));
+        if (!event.result.success && event.result.error) console.log(error(`  ${event.result.error}`));
+        break;
+      case 'verification':
+        console.log(accent(`\n  ${zh ? zhText('verification') : 'Verification'}`));
+        console.log(indentBlock(event.text));
+        break;
+      case 'agent_start':
+        console.log(secondary(`  ${event.name}: ${event.focus}`));
+        break;
+      case 'agent_done':
+        console.log(success(`  ${event.name} ${zh ? zhText('done') : 'done'}`));
+        console.log(indentBlock(event.text));
+        break;
+      case 'multi_agent_plan':
+        console.log(accent(`\n  ${zh ? '\u591a Agent \u8ba1\u5212' : 'Multi-agent plan'} (${event.plan.source})`));
+        for (const task of event.plan.tasks) {
+          const deps = task.dependsOn.length > 0 ? ` <- ${task.dependsOn.join(', ')}` : '';
+          console.log(dim(`  - ${task.id} [${task.role}] ${task.title}${deps}`));
+        }
+        break;
+      case 'multi_agent_task_claimed':
+        console.log(secondary(`  ${zh ? '\u8ba4\u9886' : 'claimed'} ${event.agentId}: ${event.task.title}`));
+        break;
+      case 'multi_agent_task_start':
+        console.log(secondary(`  ${zh ? '\u542f\u52a8' : 'started'} ${event.agentId}: ${event.task.title}`));
+        break;
+      case 'multi_agent_task_done':
+        console.log(success(`  ${event.result.agentId} ${zh ? zhText('done') : 'done'} - ${event.result.duration}ms`));
+        break;
+      case 'multi_agent_conflict':
+        console.log(error(`  ${zh ? '\u591a Agent \u51b2\u7a81' : 'Multi-agent conflict'}: ${event.conflict.message}`));
+        break;
+      case 'multi_agent_merge':
+        console.log(accent(`\n  ${zh ? '\u591a Agent \u6c47\u603b' : 'Multi-agent merge'}`));
+        console.log(indentBlock(event.text));
+        console.log(dim(`  ${zh ? '\u72b6\u6001\u76ee\u5f55' : 'State directory'}: ${event.result.stateDir}`));
+        break;
+      case 'multi_agent_done':
+        break;
+      case 'usage':
+        console.log(dim(`  tokens input=${event.usage.inputTokens} output=${event.usage.outputTokens} total=${event.usage.totalTokens}`));
+        break;
+      case 'done':
+        break;
+      case 'error':
+        console.log(error(`  Agent Loop ${zh ? zhText('failed') : 'failed'}: ${event.error.message}`));
+        break;
+    }
+  }
+
+  private async extractAutoMemories(messages: Message[]): Promise<void> {
+    const enabled = this.configManager.get('memory.auto') !== false;
+    if (!enabled) return;
+    const extractor = new AutoMemoryExtractor({
+      llmProvider: this.llmProvider,
+      language: this.getLanguage(),
+      characterId: this.characterManager.getCurrentCharacter().id,
+      sessionId: this.sessionStore.sessionId,
+    });
+    const candidates = await extractor.extract(messages);
+    for (const candidate of candidates.slice(0, 5)) {
+      try {
+        await this.memoryStore.add(candidate);
+      } catch (error) {
+        if (error instanceof MemoryPolicyError) continue;
+        throw error;
+      }
+    }
+  }
+  private async initializeSession(): Promise<void> {
+    await this.sessionStore.init({
+      provider: this.llmProvider.id,
+      model: this.configManager.get('llm.model'),
+      character: this.characterManager.getCurrentCharacter().id,
+      language: this.getLanguage(),
+    });
+  }
+
+  private async resumeSession(query?: string): Promise<void> {
+    const found = await this.sessionStore.find(query);
+    const zh = this.getLanguage() === 'zh-CN';
+    if (!found) {
+      console.log(chalk.yellow(`  ${zh ? zhText('noSession') : 'No resumable session found.'}`));
+      return;
+    }
+
+    this.sessionStore = new SessionStore(process.cwd(), found.sessionId);
+    this.agentMessages = (await this.sessionStore.readMessages()).filter(message => message.role !== 'system');
+    this.conversationTurns = this.agentMessages.filter(message => message.role === 'user').length;
+    this.agentLoop = this.createAgentLoop();
+
+    console.log(chalk.green(`  ${zh ? zhText('sessionResumed') : 'Session resumed'}: ${found.sessionId}`));
+    console.log(chalk.dim(`  ${found.path}`));
+    console.log(chalk.dim(`  ${zh ? zhText('messages') : 'Messages'}: ${this.agentMessages.length}`));
+  }
+
+  private async exportSession(target?: string, format: 'text' | 'jsonl' = 'text'): Promise<void> {
+    const zh = this.getLanguage() === 'zh-CN';
+    const content = await this.sessionStore.export({ format });
+    const extension = format === 'jsonl' ? 'jsonl' : 'txt';
+    const outputPath = resolve(process.cwd(), target || `.roxycode/exports/session-${this.sessionStore.sessionId}.${extension}`);
+    await mkdir(dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, content, 'utf8');
+    console.log(chalk.green(`  ${zh ? zhText('sessionExported') : 'Session exported'}: ${outputPath}`));
+  }
+
+  private async rewindSession(count?: number): Promise<void> {
+    const zh = this.getLanguage() === 'zh-CN';
+    const targetCount = count ?? Math.max(0, this.agentMessages.length - 2);
+    const result = await this.sessionStore.rewind(targetCount);
+    this.agentMessages = result.messages.filter(message => message.role !== 'system');
+    this.conversationTurns = this.agentMessages.filter(message => message.role === 'user').length;
+    this.agentLoop = this.createAgentLoop();
+    console.log(chalk.green(`  ${zh ? zhText('sessionRewound') : 'Session rewound'}: ${this.agentMessages.length} ${zh ? zhText('messagesLower') : 'messages'}`));
+    console.log(chalk.dim(`  ${zh ? zhText('removed') : 'Removed'}: ${result.removed}`));
+  }
+
+  private async compactSession(): Promise<void> {
+    const zh = this.getLanguage() === 'zh-CN';
+    const before = await this.contextManager.getStatus(this.agentMessages);
+    const result = await this.contextManager.compress(this.agentMessages);
+    if (!result) {
+      console.log(chalk.yellow(`  ${zh ? zhText('compactNotNeeded') : 'Current context does not need compaction.'}`));
+      return;
+    }
+
+    this.agentMessages = result.messages.filter(message => message.role !== 'system');
+    await this.sessionStore.append({
+      type: 'compact',
+      summary: result.summary,
+      metadata: {
+        layerUsed: result.layerUsed,
+        beforeTokens: before.currentTokens,
+        afterTokens: result.compressedTokens,
+        removedCount: result.removedCount,
+      },
+    });
+
+    console.log(chalk.green(`  ${zh ? zhText('contextCompacted') : 'Context compacted'}: ${result.layerUsed}`));
+    console.log(chalk.dim(`  ${before.currentTokens.toLocaleString()} -> ${result.compressedTokens.toLocaleString()} tokens`));
+  }
+
+  private async confirmToolPrompt(prompt: ToolPermissionPrompt, second: boolean): Promise<boolean> {
+    const character = this.characterManager.getCurrentCharacter();
+    const language = this.getLanguage();
+    if (!process.stdin.isTTY) {
+      const warning = language === 'en-US'
+        ? 'Permission confirmation requires an interactive terminal. Denied by default.'
+        : zhText('permissionNonInteractiveDenied');
+      console.log(chalk.hex(character.theme.error)(`  ${warning}`));
+      return false;
+    }
+
+    const readerWasActive = this.reader?.isActive === true;
+    if (readerWasActive) this.reader?.pause();
+    try {
+      return await requestPermissionConfirmation({ prompt, second, character, language });
+    } finally {
+      if (readerWasActive && !this.shutdownRequested) this.reader?.resume({ redraw: false });
+    }
+  }
+
+  private onInputChange(buffer: string): void {
+    if (!buffer.startsWith('/')) {
+      this.closePalette();
+      return;
+    }
+    this.paletteActive = true;
+    const query = this.palette.isSubLevel ? buffer.trimStart().split(/\s+/).at(-1) ?? '' : buffer.slice(1);
+    this.palette.filter(query);
+    this.renderPalette();
+  }
+
+  private onKeyEvent(event: KeyEvent): void {
+    switch (event.type) {
+      case 'up':
+        if (this.paletteActive && this.palette.visible) { this.palette.moveUp(); this.renderPalette(); }
+        break;
+      case 'down':
+        if (this.paletteActive && this.palette.visible) { this.palette.moveDown(); this.renderPalette(); }
+        break;
+      case 'escape':
+        if (this.paletteActive) {
+          if (this.palette.isSubLevel) this.popMenuLevel();
+          else { this.closePalette(); this.reader?.clearLine(); }
+        }
+        break;
+      case 'tab':
+        if (this.paletteActive && this.palette.visible) this.selectPaletteItem();
+        else this.handleTabComplete();
+        break;
+    }
+  }
+
+  private selectPaletteItem(options: PaletteSelectionOptions = {}): void {
+    const selected = this.palette.selected;
+    if (!selected) return;
+    if (selected.hasChildren) { this.enterSubMenu(selected, options); return; }
+    if (selected.needsInput) {
+      const commandText = `${this.buildCommandPath(selected.name)} `;
+      this.closePalette();
+      this.reader?.setLine(commandText, { emitChange: false });
+      return;
+    }
+    this.submitPaletteCommand(this.buildCommandPath(selected.name), options);
+  }
+
+  private enterSubMenu(selected: PaletteItem, options: PaletteSelectionOptions = {}): void {
+    let subItems: PaletteItem[];
+    let levelLabel: string;
+    if (selected.name === 'help' && !this.palette.isSubLevel) {
+      subItems = this.getHelpPaletteItems();
+      levelLabel = 'help';
+    } else if (selected.name === 'compress' && this.palette.isSubLevel) {
+      subItems = this.getCompressSubItems();
+      levelLabel = 'compress';
+    } else {
+      const cmd = this.commandRegistry.get(selected.name);
+      if (!cmd?.subcommands?.length) {
+        this.submitPaletteCommand(this.buildCommandPath(selected.name), options);
+        return;
+      }
+      subItems = this.toSubPaletteItems(cmd.subcommands);
+      levelLabel = selected.name;
+    }
+
+    const currentLine = (this.reader?.line ?? '').trimEnd();
+    const bufferText = this.palette.isSubLevel ? `${currentLine} ${selected.name} ` : `/${selected.name} `;
+    this.palette.pushLevel(levelLabel, subItems, bufferText);
+    this.reader?.setLine(bufferText, { emitChange: false });
+    this.renderPalette();
+  }
+
+  private popMenuLevel(): void {
+    const parentBuffer = this.palette.popLevel();
+    if (parentBuffer === null) {
+      this.closePalette();
+      this.reader?.setLine('/');
+      return;
+    }
+    this.reader?.setLine(parentBuffer);
+    this.palette.filter(parentBuffer.trimStart().split(/\s+/).at(-1) ?? '');
+    this.renderPalette();
+  }
+
+  private buildCommandPath(leafName: string): string {
+    if (!this.palette.isSubLevel) return `/${leafName}`;
+    const parts = [this.palette.breadcrumbs[0], ...this.palette.breadcrumbs.slice(1), leafName].filter(Boolean);
+    return `/${parts.join(' ')}`;
+  }
+
+  private submitPaletteCommand(commandText: string, options: PaletteSelectionOptions = {}): void {
+    this.closePalette();
+    this.reader?.setLine(commandText, { emitChange: false });
+    this.reader?.clearCurrentLine();
+    if (!options.lineAlreadySubmitted) process.stdout.write('\n');
+    void this.onLineSubmit(commandText, { fromPalette: true }).catch(err => this.handleLineSubmitError(commandText, err));
+  }
+
+  private renderPalette(): void {
+    if (!this.reader) return;
+    const theme = this.characterManager.getCurrentCharacter().theme;
+    this.reader.clearCurrentLine();
+    this.palette.render({ primary: theme.primary, secondary: theme.secondary, accent: theme.accent, dim: theme.dim });
+    this.reader.redraw();
+  }
+
+  private closePalette(): void {
+    if (!this.paletteActive) return;
+    this.paletteActive = false;
+    if (this.palette.isRendered) {
+      this.reader?.clearCurrentLine();
+      this.palette.clear();
+      this.reader?.redraw();
+    } else {
+      this.palette.clear();
+    }
+    this.palette.reset();
+  }
+
+  private handleTabComplete(): void {
+    if (!this.reader) return;
+    const line = this.reader.line;
+    if (!line.startsWith('/')) return;
+    const names = this.commandRegistry.list().flatMap(cmd => [`/${cmd.name}`, ...(cmd.aliases ?? []).map(alias => `/${alias}`)]);
+    const hits = names.filter(name => name.startsWith(line));
+    if (hits.length === 1) this.reader.setLine(hits[0]);
+    else if (hits.length > 1) { this.paletteActive = true; this.palette.filter(line.slice(1)); this.renderPalette(); }
+  }
+
+  private showPrompt(): void {
+    console.log();
+    this.renderPromptStatus();
+    this.reader?.prompt_();
+  }
+
+  private getPromptString(character: Character): string {
+    return chalk.hex(character.theme.primary)('  > ');
+  }
+
+  private renderPromptStatus(): void {
+    const character = this.characterManager.getCurrentCharacter();
+    const model = (this.configManager.get('llm.model') as string) || 'auto';
+    const { value: contextWindow } = this.contextManager.getEffectiveMaxTokens();
+    this.interactionRenderer.updateCharacter(character);
+    this.interactionRenderer.renderPromptStatus({
+      character,
+      language: this.getLanguage(),
+      providerName: this.llmProvider.name,
+      providerId: this.llmProvider.id,
+      model,
+      mode: ((this.configManager.get('mode') as string) || 'auto').toLowerCase(),
+      contextWindow,
+      turns: this.conversationTurns,
+      commandCount: this.commandRegistry.list().length,
+      historyCount: this.inputHistory.getHistory().length,
+      elapsedMs: Date.now() - this.sessionStartTime,
+      cwd: process.cwd(),
+    });
+  }
+
+  private showHelp(): void {
+    const character = this.characterManager.getCurrentCharacter();
+    const text = this.getText();
+    const meta = getCategoryMeta(text.categories as Partial<Record<CommandCategory, string>>);
+    const grouped = this.commandRegistry.listByCategory();
+    const border = chalk.hex(character.theme.primary);
+    const accent = chalk.hex(character.theme.accent);
+    console.log('');
+    console.log(border(`  +-- RoxyCode v${APP_VERSION} ${text.help.header} --+`));
+    for (const [category, commands] of grouped) {
+      const categoryMeta = meta[category];
+      console.log(accent(`  ${categoryMeta.icon} ${categoryMeta.label}`));
+      for (const cmd of commands) console.log(`    /${cmd.name.padEnd(14)} ${cmd.description}`);
+    }
+    console.log('');
+  }
+
+  private showCommandHelp(cmdName: string): void {
+    const name = cmdName.startsWith('/') ? cmdName.slice(1) : cmdName;
+    const cmd = this.commandRegistry.get(name);
+    const text = this.getText();
+    if (!cmd) {
+      console.log(chalk.red(`  ${text.help.notFound}: /${name}`));
+      return;
+    }
+    console.log(chalk.bold(`\n  /${cmd.name}`));
+    console.log(`  ${text.help.descriptionLabel}: ${cmd.description}`);
+    if (cmd.usage) console.log(`  ${text.help.usageLabel}: ${cmd.usage}`);
+    if (cmd.examples?.length) console.log(cmd.examples.map(example => `  $ ${example}`).join('\n'));
+    console.log('');
+  }
+
+  private showHistory(): void {
+    const history = this.inputHistory.getHistory().slice(-20);
+    const text = this.getText();
+    console.log(chalk.bold(`\n  ${text.history.title}`));
+    if (history.length === 0) console.log(chalk.dim(`  ${text.history.empty}`));
+    history.forEach((item, index) => console.log(`  ${String(index + 1).padStart(2)} ${item}`));
+    console.log('');
+  }
+
+  private requestShutdown(exitCode = 0): void {
+    if (this.shutdownRequested) { process.exitCode = exitCode; return; }
+    this.shutdownRequested = true;
+    this.palette.clear();
+    this.reader?.pause();
+    process.exitCode = exitCode;
+  }
+
+  private handleLineSubmitError(line: string, error: unknown): void {
+    this.processing = false;
+    this.closePalette();
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(chalk.hex(this.characterManager.getCurrentCharacter().theme.error)(`  ERR ${line.trim()}: ${message}`));
+    if (!this.shutdownRequested && this.reader?.isActive) this.showPrompt();
+  }
+}
+
+function indentBlock(text: string): string {
+  return text.split('\n').map(line => `  ${line}`).join('\n');
+}
+
+type ZhKey =
+  | 'characterInfo'
+  | 'characterRandom'
+  | 'compressOn'
+  | 'compressOff'
+  | 'plan'
+  | 'tool'
+  | 'toolResult'
+  | 'verification'
+  | 'done'
+  | 'failed'
+  | 'noSession'
+  | 'sessionResumed'
+  | 'messages'
+  | 'messagesLower'
+  | 'sessionExported'
+  | 'sessionRewound'
+  | 'removed'
+  | 'compactNotNeeded'
+  | 'contextCompacted'
+  | 'permissionNonInteractiveDenied';
+
+const ZH: Record<ZhKey, string> = {
+  characterInfo: '\u663e\u793a\u5f53\u524d\u89d2\u8272\u8be6\u7ec6\u4fe1\u606f',
+  characterRandom: '\u968f\u673a\u5207\u6362\u4e00\u4e2a\u89d2\u8272',
+  compressOn: '\u542f\u7528\u81ea\u52a8\u4e0a\u4e0b\u6587\u538b\u7f29',
+  compressOff: '\u5173\u95ed\u81ea\u52a8\u4e0a\u4e0b\u6587\u538b\u7f29',
+  plan: '\u8ba1\u5212',
+  tool: '\u5de5\u5177',
+  toolResult: '\u5de5\u5177\u7ed3\u679c',
+  verification: '\u9a8c\u8bc1',
+  done: '\u5b8c\u6210',
+  failed: '\u5931\u8d25',
+  noSession: '\u6ca1\u6709\u627e\u5230\u53ef\u6062\u590d\u7684\u4f1a\u8bdd\u3002',
+  sessionResumed: '\u4f1a\u8bdd\u5df2\u6062\u590d',
+  messages: '\u6d88\u606f',
+  messagesLower: '\u6761\u6d88\u606f',
+  sessionExported: '\u4f1a\u8bdd\u5df2\u5bfc\u51fa',
+  sessionRewound: '\u4f1a\u8bdd\u5df2\u56de\u9000',
+  removed: '\u5df2\u79fb\u9664',
+  compactNotNeeded: '\u5f53\u524d\u4e0a\u4e0b\u6587\u8fd8\u4e0d\u9700\u8981\u538b\u7f29\u3002',
+  contextCompacted: '\u4e0a\u4e0b\u6587\u5df2\u538b\u7f29',
+  permissionNonInteractiveDenied: '\u6743\u9650\u786e\u8ba4\u9700\u8981\u4ea4\u4e92\u5f0f\u7ec8\u7aef\uff0c\u5df2\u9ed8\u8ba4\u62d2\u7edd\u8be5\u64cd\u4f5c\u3002',
+};
+
+function zhText(key: ZhKey): string {
+  return ZH[key];
+}
+
+
+
