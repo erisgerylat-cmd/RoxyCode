@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from 'node:path';
 import type { CharacterManager } from '../../aesthetic/character/CharacterManager.js';
 import type { ConfigManager } from '../../core/ConfigManager.js';
 import { normalizeLanguage } from '../../i18n/index.js';
@@ -19,10 +20,7 @@ export class WorkflowCommandSource implements DynamicCommandSource {
 
   async discover(context: CommandSourceLoadContext): Promise<CommandSourceLoadResult> {
     const builtin = this.options.configManager.get('workflows.builtin') !== false;
-    const configuredDirs = this.options.configManager.get('workflows.directories');
-    const directories = Array.isArray(configuredDirs)
-      ? configuredDirs.map(String).filter(Boolean)
-      : ['.roxycode/workflows'];
+    const directories = this.workflowDirectories();
     const loaded = await new WorkflowLoader({ cwd: this.options.cwd, builtin, directories }).load();
     const language = normalizeLanguage(this.options.configManager.get('ui.language'));
     const commands: CommandDefinition[] = loaded.workflows.map(workflow => ({
@@ -32,6 +30,7 @@ export class WorkflowCommandSource implements DynamicCommandSource {
       category: 'workflow',
       source: 'workflow',
       type: 'prompt',
+      argumentHint: workflow.inputs.length ? workflow.inputs.map(input => `--${input.name}`).join(' ') : undefined,
       usage: `/wf:${workflow.id} [--input value]`,
       examples: [`/wf:${workflow.id}`],
       handler: async args => {
@@ -54,5 +53,16 @@ export class WorkflowCommandSource implements DynamicCommandSource {
       commands,
       errors: loaded.errors.map(error => ({ source: this.name, path: error.path, message: error.message })),
     };
+  }
+
+  watchPaths(): string[] {
+    return this.workflowDirectories().map(directory => isAbsolute(directory) ? directory : resolve(this.options.cwd, directory));
+  }
+
+  private workflowDirectories(): string[] {
+    const configuredDirs = this.options.configManager.get('workflows.directories');
+    return Array.isArray(configuredDirs)
+      ? configuredDirs.map(String).filter(Boolean)
+      : ['.roxycode/workflows'];
   }
 }

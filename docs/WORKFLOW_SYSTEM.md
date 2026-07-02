@@ -24,6 +24,9 @@ Implemented modules:
 - `src/workflow/WorkflowLoader.ts`: loads built-in and project workflows, with project workflows overriding same-id built-ins.
 - `src/workflow/WorkflowPrompt.ts`: renders a workflow plus arguments into a structured prompt.
 - `src/commands/builtin/workflow.ts`: `/workflow` command.
+- `src/commands/sources/WorkflowCommandSource.ts`: exposes each workflow as a dynamic prompt command named `/wf:<id>`, with aliases and argument hints.
+- `src/commands/CommandLoader.ts`: aggregates workflow commands with plugin and skill commands.
+- `src/commands/CommandWatcher.ts`: reloads workflow commands in development mode when workflow files change.
 - `src/engine/agent/RuntimeContext.ts`: injects an available workflow summary into runtime context.
 
 ## Built-In Workflows
@@ -46,9 +49,13 @@ Implemented modules:
 /workflow run test-generate --target src/workflow
 /workflow run code-review
 /workflow paths
+/wf:spring-crud --entity User --fields "name, email, status"
+/wf:vue-page --page 采购组织查询 --requirements "弹窗选择后回填字段"
 ```
 
-`/workflow run` writes the generated workflow prompt into the JSONL session and then calls the existing Agent Loop. File changes and shell commands still require the normal RoxyCode permission confirmation.
+`/workflow run` and dynamic `/wf:<id>` commands both render a workflow prompt, write it into the JSONL session, and call the existing Agent Loop. File changes and shell commands still require the normal RoxyCode permission confirmation.
+
+Development hot reload is opt-in. Set one of these before starting RoxyCode: `ROXY_COMMAND_WATCH=1`, `ROXY_DEV=1`, or `NODE_ENV=development`.
 
 ## Custom Workflow YAML
 

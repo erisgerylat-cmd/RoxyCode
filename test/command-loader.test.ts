@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import type { CharacterManager } from '../src/aesthetic/character/CharacterManager.js';
-import type { CommandDefinition } from '../src/commands/CommandRegistry.js';
+import { CommandRegistry, type CommandDefinition } from '../src/commands/CommandRegistry.js';
 import { CommandLoader } from '../src/commands/CommandLoader.js';
+import { CommandWatcher } from '../src/commands/CommandWatcher.js';
 import { PluginCommandSource, SkillCommandSource, WorkflowCommandSource } from '../src/commands/sources/index.js';
 import type { DynamicCommandSource } from '../src/commands/sources/index.js';
 import type { ConfigManager } from '../src/core/ConfigManager.js';
@@ -152,3 +153,104 @@ test('command loader reports duplicate dynamic commands without dropping earlier
   assert.equal(result.errors[0].source, 'second-source');
   assert.match(result.errors[0].message, /conflicts/);
 });
+
+test('command loader rejects dynamic commands that conflict with reserved builtin names', async () => {
+  const dynamic: CommandDefinition = {
+    name: 'help',
+    description: 'conflicting dynamic command',
+    source: 'workflow',
+    handler: () => undefined,
+  };
+  const result = await new CommandLoader([
+    { name: 'workflow', discover: async () => ({ commands: [dynamic], errors: [] }) },
+  ]).load({ reservedNames: ['help', 'h'] });
+
+  assert.equal(result.commands.length, 0);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0].message, /reserved/);
+});
+
+test('command registry can replace and unregister dynamic command sources without touching builtins', () => {
+  const registry = new CommandRegistry();
+  registry.register({ name: 'help', description: 'builtin help', source: 'builtin', handler: () => undefined });
+  registry.register({ name: 'wf:old', description: 'old workflow', source: 'workflow', aliases: ['wf:o'], handler: () => undefined });
+
+  const result = registry.replaceBySource('workflow', [
+    { name: 'wf:new', description: 'new workflow', source: 'workflow', aliases: ['wf:n'], handler: () => undefined },
+  ]);
+
+  assert.deepEqual(result, { removed: 1, registered: 1 });
+  assert.equal(registry.has('help'), true);
+  assert.equal(registry.has('wf:old'), false);
+  assert.equal(registry.has('wf:o'), false);
+  assert.equal(registry.has('wf:new'), true);
+  assert.equal(registry.has('wf:n'), true);
+
+  assert.throws(() => registry.replaceBySource('workflow', [
+    { name: 'help', description: 'bad workflow', source: 'workflow', handler: () => undefined },
+  ]), /already registered/);
+  assert.equal(registry.has('help'), true);
+  assert.equal(registry.has('wf:new'), true);
+});
+
+test('command watcher reloads dynamic workflow commands after a debounced trigger', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-command-watcher-'));
+  let watcher: CommandWatcher | null = null;
+  try {
+    await writeFixtures(cwd);
+    const config = createConfig();
+    const registry = new CommandRegistry();
+    registry.register({ name: 'help', description: 'builtin help', source: 'builtin', handler: () => undefined });
+
+    const loader = new CommandLoader([
+      new WorkflowCommandSource({ cwd, configManager: createConfigManager(config), characterManager: createCharacterManager(), sessionId: 'session-test' }),
+      new PluginCommandSource({ cwd, config }),
+      new SkillCommandSource({ cwd }),
+    ]);
+    const initial = await loader.load({ reservedNames: ['help'] });
+    registry.registerMany(initial.commands);
+    assert.equal(registry.has('wf:custom-page'), true);
+
+    const reloaded: string[][] = [];
+    watcher = new CommandWatcher({
+      cwd,
+      loader,
+      debounceMs: 10,
+      paths: [join(cwd, '.roxycode', 'workflows')],
+      context: { reservedNames: ['help'] },
+      onReload: result => {
+        registry.replaceBySource(['workflow', 'plugin', 'skill'], result.commands);
+        reloaded.push(result.commands.map(command => command.name));
+      },
+    });
+    const watched = await watcher.start();
+    assert.equal(watched.length, 1);
+
+    await writeFile(join(cwd, '.roxycode', 'workflows', 'custom-card.yml'), [
+      'id: custom-card',
+      'name: Custom Card',
+      'description: Build a custom card',
+      'mode: standard',
+      'category: frontend',
+      'prompt: |',
+      '  Build a card component.',
+    ].join('\n'), 'utf8');
+    watcher.trigger(join(cwd, '.roxycode', 'workflows', 'custom-card.yml'));
+
+    await waitFor(() => registry.has('wf:custom-card'));
+    assert.equal(registry.has('help'), true);
+    assert.ok(reloaded.some(commands => commands.includes('wf:custom-card')));
+  } finally {
+    watcher?.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1500): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.equal(predicate(), true);
+}

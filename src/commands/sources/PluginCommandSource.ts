@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from 'node:path';
 import { collectPluginContributions, createPluginCommands, PluginLoader } from '../../plugin/index.js';
 import type { PluginLoadResult } from '../../plugin/index.js';
 import type { RoxyCodeConfig } from '../../core/types/config.js';
@@ -21,5 +22,10 @@ export class PluginCommandSource implements DynamicCommandSource {
       commands: createPluginCommands({ commands: contributions.commands, runAgentPrompt: context.runAgentPrompt }),
       errors: result.errors.map(error => ({ source: this.name, path: error.path, message: error.message })),
     };
+  }
+
+  watchPaths(): string[] {
+    const directories = this.options.config.plugins.directories?.length ? this.options.config.plugins.directories : ['.roxycode/plugins'];
+    return directories.map(directory => isAbsolute(directory) ? directory : resolve(this.options.cwd, directory));
   }
 }

@@ -55,22 +55,34 @@ Acceptance:
 
 ### P0.2 Dynamic Command Sources
 
+Status: Done. Implemented in Command System 1.2 with dynamic source loading and dev hot reload.
+
 Claude Code reference:
 
-- Builtin, skills, plugins, MCP prompts, and dynamic skills are aggregated into one command list.
+- `src/commands.ts` aggregates builtin commands, skill commands, plugin commands, MCP prompts, workflow commands, and dynamic skills through `getCommands(cwd)`.
+- `src/utils/plugins/loadPluginCommands.ts` turns plugin command files into prompt commands with source metadata.
+- `src/skills/loadSkillsDir.ts` loads disk skills into the same command contract.
+- `src/utils/skills/skillChangeDetector.ts` watches skill files, debounces changes, clears caches, and notifies the REPL.
+- `src/commands/reload-plugins/reload-plugins.ts` provides an explicit mid-session plugin refresh path.
 
-RoxyCode plan:
+RoxyCode implementation:
 
-- Add `CommandSource` interface.
-- Add `WorkflowCommandSource`, `PluginCommandSource`, and `SkillCommandSource`.
-- Add `CommandLoader` to aggregate source discovery.
-- Keep REPL's existing builtin command wiring, but make extension command loading less ad hoc.
+- `CommandSourceLoadContext` now carries `reservedNames` so dynamic commands cannot shadow builtins such as `/help`.
+- `WorkflowCommandSource` converts loaded workflows into prompt slash commands named `/wf:<id>`, with aliases, argument hints, Chinese workflow rendering, and watch paths for `.roxycode/workflows`.
+- `PluginCommandSource` loads enabled plugin manifest commands through `PluginLoader -> collectPluginContributions -> createPluginCommands`.
+- `SkillCommandSource` scans skill directories for `SKILL.md` and exposes `/skill:<dir> [task]` prompt commands.
+- `CommandLoader` aggregates workflow/plugin/skill sources, reports conflicts without crashing the REPL, and exposes source watch paths.
+- `CommandRegistry` supports `unregister`, `unregisterBySource`, and atomic `replaceBySource` so dynamic refresh does not rebuild unrelated builtins.
+- `CommandWatcher` provides development hot reload with native `fs.watch`, debounce, manual trigger support, and registry replacement callbacks.
+- REPL refresh now reloads dynamic commands, hooks, plugins, and MCP extension state through one async path; `/config reload` and language changes await this refresh.
 
 Acceptance:
 
-- `.roxycode/workflows/*.yml` can become slash commands.
+- `.roxycode/workflows/*.yml` automatically becomes `/wf:<id>` commands.
 - Plugin-contributed commands go through the same loader path.
-- Disabled/hidden commands are consistently respected.
+- Skill directories with `SKILL.md` become prompt commands.
+- Builtin-name conflicts are rejected before registration.
+- Development hot reload is available with `ROXY_COMMAND_WATCH=1`, `ROXY_DEV=1`, or `NODE_ENV=development`.
 
 ### P0.3 Tool Progress Contract
 

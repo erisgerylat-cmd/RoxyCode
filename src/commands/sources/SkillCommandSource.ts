@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import type { CommandDefinition } from '../CommandRegistry.js';
 import type { CommandSourceLoadContext, CommandSourceLoadResult, DynamicCommandSource } from './types.js';
 
@@ -15,12 +15,12 @@ export class SkillCommandSource implements DynamicCommandSource {
   constructor(private readonly options: SkillCommandSourceOptions) {}
 
   async discover(context: CommandSourceLoadContext): Promise<CommandSourceLoadResult> {
-    const directories = this.options.directories?.length ? this.options.directories : ['.roxycode/skills'];
+    const directories = this.skillDirectories();
     const commands: CommandDefinition[] = [];
     const errors: CommandSourceLoadResult['errors'] = [];
 
     for (const raw of directories) {
-      const directory = resolve(this.options.cwd, raw);
+      const directory = this.resolveDirectory(raw);
       if (!existsSync(directory)) continue;
       let entries;
       try {
@@ -45,6 +45,7 @@ export class SkillCommandSource implements DynamicCommandSource {
             source: 'skill',
             type: 'prompt',
             usage: `/${commandName} [task]`,
+            argumentHint: '[task]',
             handler: async (args: string[]) => {
               const task = args.join(' ').trim();
               const prompt = [`Use this RoxyCode skill: ${entry.name}`, markdown, task ? `Task:\n${task}` : ''].filter(Boolean).join('\n\n');
@@ -62,5 +63,17 @@ export class SkillCommandSource implements DynamicCommandSource {
     }
 
     return { commands, errors };
+  }
+
+  watchPaths(): string[] {
+    return this.skillDirectories().map(directory => this.resolveDirectory(directory));
+  }
+
+  private skillDirectories(): string[] {
+    return this.options.directories?.length ? this.options.directories : ['.roxycode/skills'];
+  }
+
+  private resolveDirectory(directory: string): string {
+    return isAbsolute(directory) ? directory : resolve(this.options.cwd, directory);
   }
 }

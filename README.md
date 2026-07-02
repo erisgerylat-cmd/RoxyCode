@@ -150,7 +150,7 @@ RoxyCode 会持续对照本地 Claude Code 源码 `D:\Programing\cc\claude-code-
 | 双语机制 | 🟡 基础完成 | `src/i18n/`，`ui.language`，`/language zh/en`，核心菜单双语 | 角色台词、细分命令页面、错误提示还未完全迁移 |
 | 角色系统 | 🟡 原型完成 | 内置多个角色、主题色、状态文字、启动台词、`/character` | 缺少用户自定义角色、角色工作模式策略 |
 | 审美层 | 🟡 概念和部分基础完成 | 启动画面、角色主题色、角色台词、状态文字已有基础 | 缺少 `/aesthetic`、主题包、sprite 小伙伴、沉浸档位、自定义资源加载 |
-| Slash 命令 | 🟡 原型完成 | help、clear、context、compact、model、status、optimize、character、history、language、version、exit 等 | 命令仍主要硬编码在 REPL，缺少动态命令加载 |
+| Slash 命令 | ✅ 已实现 | 内置命令 + `CommandLoader` 动态聚合 workflow/plugin/skill；`.roxycode/workflows/*.yml` 自动生成 `/wf:<id>`；开发态热重载 | 后续补 MCP prompt 命令和更完整的远程模式过滤 |
 | REPL/输入 | 🟡 原型完成 | RawLineReader、命令面板、Tab 补全、历史、非 TTY 串行执行 | 缺少成熟终端 UI 状态机、会话恢复、远程模式 |
 | LLM Provider | 🟡 基础完成 | OpenAI-compatible 基类，Qwen/GLM/DeepSeek/OpenAI Provider | 缺少真实调用链集成、模型验证向导、fallbackModel |
 | 上下文管理 | 🟡 基础完成 | ContextManager、压缩阈值、TruncationStrategy | 缺少摘要压缩、向量召回、working set 管理 |
@@ -171,7 +171,7 @@ RoxyCode 会持续对照本地 Claude Code 源码 `D:\Programing\cc\claude-code-
 
 | 差距 | Claude Code 现状 | RoxyCode 当前状态 | 优先级 |
 |------|------------------|-------------------|--------|
-| 统一命令加载 | `commands.ts` 聚合 builtin、skills、plugins、MCP、dynamic skills，并做过滤 | 命令主要硬编码在 `REPL.ts` | 高 |
+| 统一命令加载 | `commands.ts` 聚合 builtin、skills、plugins、MCP、dynamic skills，并做过滤 | 已实现 `CommandLoader` + workflow/plugin/skill source + `CommandWatcher`，MCP prompt 命令后续补齐 | 中 |
 | Hook schema | `schemas/hooks.ts` 用 Zod 定义 command/prompt/http/agent Hook | 只有文档级设计 | 高 |
 | Memory 分类 | `memdir/memoryTypes.ts` 约束 memory 类型、保存边界、过期风险 | 只有向量记忆概念 | 高 |
 | Agent 执行循环 | QueryEngine/query 流程承载工具调用和消息循环 | 自然语言输入暂未进入 Agent Loop | 最高 |
@@ -578,7 +578,7 @@ src/
 ✅ 双语基础设施（默认中文，/language 切换英文）
 ✅ LLM Provider 基础抽象
 ✅ 上下文管理基础实现
-🟡 Slash 命令原型
+✅ Slash 命令注册表与动态加载基础
 
 验收：项目可构建，启动页可展示，核心菜单默认中文，英文可切换
 ```
@@ -591,7 +591,7 @@ src/
 □ /aesthetic：设置 minimal / balanced / immersive 审美档位
 □ /theme：加载主题包
 □ /sprite：加载 ASCII / Pixel 小伙伴
-□ /workflow list/run：加载中文业务工作流
+✅ /workflow list/run：加载中文业务工作流
 □ 自定义角色加载：.roxycode/characters/*.json
 □ 配置向导：模型、语言、技术栈、解释深度、执行风格
 
@@ -632,7 +632,7 @@ src/
 ✅ Memory 读写、MEMORY.md 索引、top-5 召回与过期验证规则
 ✅ Workflow YAML schema
 ✅ 内置中文工作流：spring-crud / vue-page / bug-fix / test-generate / code-review
-□ Skill 命令动态加载
+✅ Skill 命令动态加载：`.roxycode/skills/*/SKILL.md` -> `/skill:<name> [task]`
 ✅ /memory /workflow（/skills 后续扩展）
 
 验收：RoxyCode 能记住用户偏好和项目习惯，并复用中文业务工作流

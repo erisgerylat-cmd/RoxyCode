@@ -14,6 +14,10 @@ export class CommandLoader {
     const errors: CommandLoaderResult['errors'] = [];
     const seenNames = new Map<string, string>();
 
+    for (const name of context.reservedNames ?? []) {
+      seenNames.set(name, 'reserved');
+    }
+
     for (const source of this.sources) {
       try {
         const result = await source.discover(context);
@@ -40,5 +44,20 @@ export class CommandLoader {
     }
 
     return { commands, errors };
+  }
+
+  async watchPaths(context: CommandSourceLoadContext = {}): Promise<string[]> {
+    const paths = new Set<string>();
+    for (const source of this.sources) {
+      if (!source.watchPaths) continue;
+      try {
+        for (const path of await source.watchPaths(context)) {
+          if (path) paths.add(path);
+        }
+      } catch {
+        // Discovery errors are reported by load(); watching should stay best-effort.
+      }
+    }
+    return Array.from(paths);
   }
 }

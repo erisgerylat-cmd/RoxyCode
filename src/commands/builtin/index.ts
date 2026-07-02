@@ -53,7 +53,7 @@ export interface BuiltinCommandFactoryOptions {
   showHelp: () => void;
   showCommandHelp: (cmdName: string) => void;
   showHistory: () => void;
-  reloadCommands: () => void;
+  reloadCommands: () => void | Promise<void>;
   requestShutdown: (exitCode?: number) => void;
   closeReader: () => void;
   resumeSession?: (query?: string) => Promise<void>;
@@ -785,7 +785,7 @@ async function handleLanguageCommand(args: string[], options: BuiltinCommandFact
     return;
   }
   await options.configManager.set('ui.language', next);
-  options.reloadCommands();
+  await options.reloadCommands();
   console.log(chalk.green(`  ${options.getText().language.changed} ${languageLabel(next)}`));
 }
 
@@ -843,7 +843,7 @@ async function handleConfigCommand(args: string[], options: BuiltinCommandFactor
 
   if (action === 'reload') {
     await options.configManager.reload();
-    options.reloadCommands();
+    await options.reloadCommands();
     console.log(chalk.green(`  ${configLabel(isZh, 'reloaded')}`));
     renderConfigValidation(options, { compact: true });
     return;
@@ -894,7 +894,7 @@ async function handleConfigCommand(args: string[], options: BuiltinCommandFactor
       console.log(chalk.red(`  ${configLabel(isZh, 'notSaved')}: ${err instanceof Error ? err.message : String(err)}`));
       return;
     }
-    if (parsed.path === 'ui.language') options.reloadCommands();
+    if (parsed.path === 'ui.language') await options.reloadCommands();
     console.log(chalk.green(`  ${configText.saved}: ${parsed.path}`));
     console.log(chalk.dim(`  ${configText.scope}: ${parsed.scope}`));
     console.log(chalk.dim(`  ${configLabel(isZh, 'source')}: ${formatConfigSource(options.configManager.getSource(parsed.path))}`));

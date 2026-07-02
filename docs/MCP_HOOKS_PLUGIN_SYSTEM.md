@@ -153,11 +153,11 @@ Manifest 示例：
 
 插件贡献会被合并为：
 
-- Slash command：注册为 `/pluginId:command`
+- Slash command：通过 `PluginCommandSource -> CommandLoader -> CommandRegistry` 注册为 `/pluginId:command`
 - Hook：注入 HookManager
 - MCP server：注入 McpConfigLoader，并带上 `ROXY_PLUGIN_ROOT`
 
-对照 Claude Code：Claude Code 插件支持 marketplace、缓存、依赖、commands/agents/hooks/MCP/settings/output styles。RoxyCode 当前先支持本地 manifest，这是“个人 Claude Code”产品化的第一步，后续可以自然扩展到插件市场、角色包、主题包、国产模型预设包。
+对照 Claude Code：Claude Code 插件支持 marketplace、缓存、依赖、commands/agents/hooks/MCP/settings/output styles，并通过 `/reload-plugins` 统一刷新运行态。RoxyCode 当前先支持本地 manifest，并把插件命令接入统一 `CommandLoader`；开发态可通过 `ROXY_COMMAND_WATCH=1` 热重载插件命令。这是“个人 Claude Code”产品化的第一步，后续可以自然扩展到插件市场、角色包、主题包、国产模型预设包。
 
 ## 中文向导命令
 

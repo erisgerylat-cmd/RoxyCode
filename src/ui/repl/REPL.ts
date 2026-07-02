@@ -29,8 +29,9 @@ import { SessionStore } from '../../session/store/SessionStore.js';
 import { AutoMemoryExtractor, MemoryPolicyError, MemoryStore } from '../../session/memory/index.js';
 import { HookLoader, HookManager } from '../../hooks/index.js';
 import { McpConfigLoader, McpToolAdapter } from '../../mcp/index.js';
-import { PluginLoader, collectPluginContributions } from '../../plugin/index.js';
+import { PluginLoader, collectPluginContributions, type PluginLoadResult } from '../../plugin/index.js';
 import { CommandLoader } from '../../commands/CommandLoader.js';
+import { CommandWatcher } from '../../commands/CommandWatcher.js';
 import { PluginCommandSource, SkillCommandSource, WorkflowCommandSource } from '../../commands/sources/index.js';
 import type { CommandDefinition } from '../../commands/CommandRegistry.js';
 import { createRuntimeState, type QueryProfileSummary, type RuntimeExtensionSnapshot, type RuntimeState } from '../../runtime/index.js';
@@ -74,6 +75,7 @@ export class REPL {
   private commandRegistry = new CommandRegistry();
   private extensionCommands: CommandDefinition[] = [];
   private extensionsLoaded = false;
+  private commandWatcher: CommandWatcher | null = null;
   private agentLoop: AgentLoop;
   private agentMessages: Message[] = [];
   private reader: RawLineReader | null = null;
@@ -220,28 +222,35 @@ export class REPL {
     })));
   }
 
-  private reloadCommands(): void {
+  private rebuildCommandRegistry(): void {
     this.commandRegistry.clear();
     this.registerBuiltinCommands();
     this.registerExtensionCommands();
     this.syncPaletteItems();
   }
 
+  private async reloadCommands(): Promise<void> {
+    await this.refreshExtensions({ note: 'extensions reloaded', restartWatcher: true });
+  }
+
   private async loadExtensions(): Promise<void> {
     if (this.extensionsLoaded) return;
     this.extensionsLoaded = true;
+    await this.refreshExtensions({ note: 'extensions loaded', restartWatcher: process.stdin.isTTY });
+  }
+
+  private async refreshExtensions(options: { note?: string; restartWatcher?: boolean } = {}): Promise<void> {
     const config = this.configManager.snapshot();
     const pluginResult = await new PluginLoader({ cwd: process.cwd(), config }).load();
     const contributions = collectPluginContributions(pluginResult.enabled);
 
-    const dynamicCommands = await new CommandLoader([
-      new WorkflowCommandSource({ cwd: process.cwd(), configManager: this.configManager, characterManager: this.characterManager, sessionId: this.sessionStore.sessionId }),
-      new PluginCommandSource({ cwd: process.cwd(), config, loadResult: pluginResult }),
-      new SkillCommandSource({ cwd: process.cwd() }),
-    ]).load({ runAgentPrompt: prompt => this.submitAgentPrompt(prompt) });
+    const dynamicCommands = await this.createDynamicCommandLoader(config, pluginResult).load({
+      runAgentPrompt: prompt => this.submitAgentPrompt(prompt),
+      reservedNames: this.getBuiltinCommandNames(),
+    });
 
     this.extensionCommands = dynamicCommands.commands;
-    this.reloadCommands();
+    this.rebuildCommandRegistry();
 
     const hookResult = await new HookLoader({
       cwd: process.cwd(),
@@ -288,10 +297,13 @@ export class REPL {
     this.runtimeState.recordExtensions(extensionSnapshot);
     this.toolActivityRenderer.setTools(this.toolRegistry.list());
 
+    if (options.restartWatcher) await this.startCommandWatcher();
+
     await this.sessionStore.append({
       type: 'note',
-      note: 'extensions loaded',
+      note: options.note ?? 'extensions refreshed',
       metadata: {
+        commands: { count: this.extensionCommands.length, errors: dynamicCommands.errors },
         plugins: { enabled: pluginResult.enabled.length, disabled: pluginResult.disabled.length, errors: pluginResult.errors },
         hooks: { count: hookResult.hooks.length, errors: hookResult.errors },
         mcp: {
@@ -304,6 +316,63 @@ export class REPL {
         },
       },
     }).catch(() => undefined);
+  }
+
+  private createDynamicCommandLoader(config: ReturnType<ConfigManager['snapshot']>, pluginResult?: PluginLoadResult): CommandLoader {
+    return new CommandLoader([
+      new WorkflowCommandSource({ cwd: process.cwd(), configManager: this.configManager, characterManager: this.characterManager, sessionId: this.sessionStore.sessionId }),
+      new PluginCommandSource({ cwd: process.cwd(), config, loadResult: pluginResult }),
+      new SkillCommandSource({ cwd: process.cwd(), directories: config.skills.directories }),
+    ]);
+  }
+
+  private getBuiltinCommandNames(): string[] {
+    return this.commandRegistry.list({ includeHidden: true })
+      .filter(command => (command.source ?? 'builtin') === 'builtin')
+      .flatMap(command => [command.name, ...(command.aliases ?? [])]);
+  }
+
+  private async startCommandWatcher(): Promise<void> {
+    this.commandWatcher?.stop();
+    this.commandWatcher = null;
+    if (!this.shouldEnableCommandWatcher()) return;
+
+    const config = this.configManager.snapshot();
+    const watcher = new CommandWatcher({
+      cwd: process.cwd(),
+      loader: this.createDynamicCommandLoader(config),
+      context: {
+        runAgentPrompt: prompt => this.submitAgentPrompt(prompt),
+        reservedNames: this.getBuiltinCommandNames(),
+      },
+      onReload: async result => {
+        try {
+          this.extensionCommands = result.commands;
+          this.commandRegistry.replaceBySource(['workflow', 'plugin', 'skill'], this.extensionCommands);
+          this.syncPaletteItems();
+          await this.sessionStore.append({
+            type: 'note',
+            note: 'dynamic commands hot reloaded',
+            metadata: { commands: result.commands.length, errors: result.errors },
+          });
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          this.runtimeState.recordError('command-watcher', err.message);
+        }
+      },
+      onError: error => this.runtimeState.recordError('command-watcher', error.message),
+    });
+    const watched = await watcher.start();
+    this.commandWatcher = watcher.isRunning ? watcher : null;
+    if (watched.length > 0) {
+      await this.sessionStore.append({ type: 'note', note: 'command watcher started', metadata: { watched } }).catch(() => undefined);
+    }
+  }
+
+  private shouldEnableCommandWatcher(): boolean {
+    return process.env.ROXY_COMMAND_WATCH === '1'
+      || process.env.ROXY_DEV === '1'
+      || process.env.NODE_ENV === 'development';
   }
 
   private getLanguage(): Language {
@@ -1209,6 +1278,7 @@ export class REPL {
     if (this.shutdownRequested) { process.exitCode = exitCode; return; }
     this.shutdownRequested = true;
     this.palette.clear();
+    this.commandWatcher?.stop();
     this.reader?.pause();
     process.exitCode = exitCode;
   }

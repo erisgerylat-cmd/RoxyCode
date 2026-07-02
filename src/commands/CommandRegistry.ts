@@ -138,6 +138,57 @@ export class CommandRegistry {
     }
   }
 
+  /** Unregister a command or alias for dynamic command reload. */
+  unregister(name: string): boolean {
+    const resolved = this.aliases.get(name) ?? name;
+    const command = this.commands.get(resolved);
+    if (!command) return false;
+
+    this.commands.delete(resolved);
+    for (const [alias, target] of Array.from(this.aliases.entries())) {
+      if (target === resolved || alias === name) this.aliases.delete(alias);
+    }
+    return true;
+  }
+
+  /** Unregister multiple commands and return the removed count. */
+  unregisterMany(names: string[]): number {
+    let removed = 0;
+    for (const name of names) {
+      if (this.unregister(name)) removed++;
+    }
+    return removed;
+  }
+
+  /** Unregister commands by source, used by workflow/plugin/skill reload. */
+  unregisterBySource(source: CommandSource | CommandSource[]): number {
+    const sources = new Set(Array.isArray(source) ? source : [source]);
+    const names = Array.from(this.commands.values())
+      .filter(command => sources.has(command.source ?? 'builtin'))
+      .map(command => command.name);
+    return this.unregisterMany(names);
+  }
+
+  /** Replace commands for a source and roll back if registration fails. */
+  replaceBySource(source: CommandSource | CommandSource[], commands: CommandDefinition[]): { removed: number; registered: number } {
+    const sources = new Set(Array.isArray(source) ? source : [source]);
+    const previous = Array.from(this.commands.values()).filter(command => sources.has(command.source ?? 'builtin'));
+    const removed = this.unregisterBySource(Array.from(sources));
+
+    const registered: string[] = [];
+    try {
+      for (const command of commands) {
+        this.register(command);
+        registered.push(command.name);
+      }
+      return { removed, registered: commands.length };
+    } catch (error) {
+      this.unregisterMany(registered);
+      this.registerMany(previous);
+      throw error;
+    }
+  }
+
   /** 清空命令注册表，用于语言切换后重建命令文案 */
   clear(): void {
     this.commands.clear();
