@@ -1,10 +1,12 @@
 import type { AestheticMode, CharacterId } from '../../aesthetic/character/types.js';
 
 export interface MCPServerConfig {
-  type?: 'stdio';
-  command: string;
+  type?: 'stdio' | 'sse' | 'http';
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
   enabled?: boolean;
   timeoutMs?: number;
 }

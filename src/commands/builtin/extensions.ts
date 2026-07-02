@@ -5,8 +5,8 @@ import { join, resolve } from 'node:path';
 import type { ConfigManager } from '../../core/ConfigManager.js';
 import { normalizeLanguage } from '../../i18n/index.js';
 import { HookLoader } from '../../hooks/index.js';
-import { McpConfigLoader, McpToolAdapter } from '../../mcp/index.js';
-import { PluginLoader, collectPluginContributions } from '../../plugin/index.js';
+import { describeMcpEndpoint, McpConfigLoader, McpToolAdapter } from '../../mcp/index.js';
+import { collectPluginContributions, PluginLoader } from '../../plugin/index.js';
 
 export interface ExtensionCommandOptions {
   configManager: ConfigManager;
@@ -53,9 +53,9 @@ async function initMcp(language: Lang, args: string[]): Promise<void> {
   }
 
   await mkdir(resolve(process.cwd(), '.roxycode'), { recursive: true });
-  await writeFile(target, `${JSON.stringify({
+  await writeJson(target, {
     mcpServers: {
-      example: {
+      localExample: {
         type: 'stdio',
         command: 'node',
         args: ['path/to/your-mcp-server.js'],
@@ -63,13 +63,27 @@ async function initMcp(language: Lang, args: string[]): Promise<void> {
         enabled: false,
         timeoutMs: 30000,
       },
+      httpExample: {
+        type: 'http',
+        url: 'https://example.com/mcp',
+        headers: {},
+        enabled: false,
+        timeoutMs: 30000,
+      },
+      sseExample: {
+        type: 'sse',
+        url: 'https://example.com/sse',
+        headers: {},
+        enabled: false,
+        timeoutMs: 30000,
+      },
     },
-  }, null, 2)}\n`, 'utf8');
+  });
   console.log(chalk.green(`  ${zh(language, '已生成 MCP 配置模板', 'MCP config template created')}: ${target}`));
   console.log(chalk.dim(zh(
     language,
-    '  将 enabled 改为 true 后，RoxyCode 会把 MCP tools 注册为 mcp__server__tool，并走统一权限确认。',
-    '  Set enabled=true to register MCP tools as mcp__server__tool through the unified permission flow.',
+    '  将 enabled 改为 true 后，stdio 工具会注册为 mcp__server__tool；HTTP/SSE 当前先支持配置校验和列表展示。',
+    '  Set enabled=true to register stdio tools as mcp__server__tool. HTTP/SSE configs are validated and listed first.',
   )));
 }
 
@@ -86,7 +100,11 @@ async function listMcp(options: ExtensionCommandOptions, language: Lang): Promis
   console.log(chalk.bold(zh(language, '  MCP 外部工具', '  MCP external tools')));
   if (loadResult.servers.length === 0) console.log(chalk.dim(zh(language, '  暂无 MCP server。', '  No MCP servers configured.')));
   for (const server of loadResult.servers) {
-    console.log(`  ${server.enabled === false ? chalk.dim('-') : chalk.green('*')} ${server.name} (${server.source}) ${server.command} ${(server.args ?? []).join(' ')}`);
+    const marker = server.enabled === false ? chalk.dim('-') : chalk.green('*');
+    const transport = server.type ?? 'stdio';
+    const headerCount = server.headers ? Object.keys(server.headers).length : 0;
+    const headerInfo = headerCount > 0 ? ` headers=${headerCount}` : '';
+    console.log(`  ${marker} ${server.name} [${transport}] (${server.source}) ${describeMcpEndpoint(server)}${headerInfo}`);
   }
   for (const tool of tools.tools) console.log(chalk.dim(`    tool: ${tool.definition.name}`));
   printErrors([...loadResult.errors.map(e => `${e.source}: ${e.message}`), ...tools.errors.map(e => `${e.server}: ${e.message}`)]);
@@ -108,11 +126,12 @@ async function initHooks(language: Lang, args: string[]): Promise<void> {
   const target = join(dir, 'example.json');
   if (existsSync(target) && !force) {
     console.log(chalk.yellow(`  ${zh(language, 'Hooks 示例已存在', 'Hooks example already exists')}: ${target}`));
+    console.log(chalk.dim(zh(language, '  如需覆盖，请使用 /hooks init --force', '  Use /hooks init --force to overwrite.')));
     return;
   }
 
   await mkdir(dir, { recursive: true });
-  await writeFile(target, `${JSON.stringify({
+  await writeJson(target, {
     hooks: [
       {
         id: 'inject-project-note',
@@ -164,7 +183,7 @@ async function initHooks(language: Lang, args: string[]): Promise<void> {
         prompt: '请作为审查小助手复核本次回答：$ARGUMENTS',
       },
     ],
-  }, null, 2)}\n`, 'utf8');
+  });
   console.log(chalk.green(`  ${zh(language, '已生成 Hooks 示例', 'Hooks example created')}: ${target}`));
 }
 
@@ -208,7 +227,7 @@ async function initPlugin(language: Lang, args: string[]): Promise<void> {
   }
 
   await mkdir(dir, { recursive: true });
-  await writeFile(target, `${JSON.stringify({
+  await writeJson(target, {
     id,
     name: id,
     version: '0.1.0',
@@ -226,7 +245,7 @@ async function initPlugin(language: Lang, args: string[]): Promise<void> {
     mcpServers: {},
     workflows: [],
     characters: [],
-  }, null, 2)}\n`, 'utf8');
+  });
   console.log(chalk.green(`  ${zh(language, '已生成插件模板', 'Plugin template created')}: ${target}`));
   console.log(chalk.dim(zh(language, `  命令会注册为 /${id}:review-style`, `  Command will be registered as /${id}:review-style`)));
 }
@@ -258,6 +277,10 @@ async function validatePlugins(options: ExtensionCommandOptions, language: Lang)
   }
   console.log(chalk.yellow(zh(language, '  插件校验发现问题：', '  Plugin validation warnings:')));
   printErrors(result.errors.map(error => `${error.path}: ${error.message}`));
+}
+
+async function writeJson(path: string, value: unknown): Promise<void> {
+  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
 function printErrors(errors: string[]): void {

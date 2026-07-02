@@ -2,10 +2,11 @@ import type { Tool, ToolDefinition, ToolParameterProperty, ToolParameterSchema }
 import { formatToolResult } from '../tool/executor/ToolExecutor.js';
 import { emitToolProgress } from '../tool/progress/ToolProgress.js';
 import type { McpServerDefinition, McpToolAnnotations, McpToolDefinition } from './types.js';
-import { McpStdioClient } from './McpStdioClient.js';
+import { createMcpTransport } from './McpTransportFactory.js';
+import type { McpClientTransport } from './transports/types.js';
 
 export class McpToolAdapter {
-  private readonly clients = new Map<string, McpStdioClient>();
+  private readonly clients = new Map<string, McpClientTransport>();
 
   constructor(private readonly cwd: string = process.cwd()) {}
 
@@ -33,10 +34,10 @@ export class McpToolAdapter {
     this.clients.clear();
   }
 
-  private getClient(server: McpServerDefinition): McpStdioClient {
+  private getClient(server: McpServerDefinition): McpClientTransport {
     const existing = this.clients.get(server.name);
     if (existing) return existing;
-    const client = new McpStdioClient(server, this.cwd);
+    const client = createMcpTransport(server, this.cwd);
     this.clients.set(server.name, client);
     return client;
   }
@@ -67,10 +68,11 @@ export class McpToolAdapter {
         return {
           title: zh ? `确认调用 MCP 工具：${mcpTool.roxyName}` : `Confirm MCP tool: ${mcpTool.roxyName}`,
           message: zh
-            ? 'MCP 工具来自外部服务，可能读取外部资源、调用第三方能力或影响项目状态。'
-            : 'This MCP tool comes from an external server and may access external resources or affect project state.',
+            ? 'MCP 工具来自外部服务，可能读取外部资源、调用第三方能力或影响项目状态。RoxyCode 会继续走统一权限确认与审计。'
+            : 'This MCP tool comes from an external server and may access external resources or affect project state. RoxyCode keeps it inside the unified permission and audit flow.',
           details: [
             `server: ${server.name}`,
+            `transport: ${server.type ?? 'stdio'}`,
             `tool: ${mcpTool.originalName}`,
             `args: ${JSON.stringify(args)}`,
           ],

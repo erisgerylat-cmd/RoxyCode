@@ -285,6 +285,7 @@ function validateMcpServers(
 ): void {
   const servers = getNestedValue(config, 'mcp.servers');
   if (!isPlainObject(servers)) return;
+  const supportedTypes = new Set(['stdio', 'sse', 'http']);
   for (const [name, value] of Object.entries(servers)) {
     const base = `mcp.servers.${name}`;
     if (!isPlainObject(value)) {
@@ -298,34 +299,37 @@ function validateMcpServers(
       });
       continue;
     }
-    if (hasNestedValue(value, 'type') && getNestedValue(value, 'type') !== 'stdio') {
+
+    const rawType = value.type;
+    const type = rawType === undefined ? 'stdio' : typeof rawType === 'string' ? rawType : '';
+    if (rawType !== undefined && typeof rawType !== 'string') {
       issues.push({
         path: `${base}.type`,
-        message: 'Only stdio MCP servers are supported right now.',
+        message: 'MCP server type must be a string.',
         severity: 'error',
         source,
-        expected: 'stdio',
-        actual: String(getNestedValue(value, 'type')),
+        expected: 'stdio | sse | http',
+        actual: describeType(rawType),
+      });
+    } else if (!supportedTypes.has(type)) {
+      issues.push({
+        path: `${base}.type`,
+        message: 'Unsupported MCP transport type.',
+        severity: 'error',
+        source,
+        expected: 'stdio | sse | http',
+        actual: String(rawType),
       });
     }
-    if (typeof value.command !== 'string' || value.command.trim() === '') {
+
+    if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
       issues.push({
-        path: `${base}.command`,
-        message: 'MCP server requires command.',
+        path: `${base}.enabled`,
+        message: 'enabled must be a boolean.',
         severity: 'error',
         source,
-        expected: 'non-empty string',
-        actual: describeType(value.command),
-      });
-    }
-    if (value.args !== undefined && (!Array.isArray(value.args) || !value.args.every(item => typeof item === 'string'))) {
-      issues.push({
-        path: `${base}.args`,
-        message: 'args must be a string array.',
-        severity: 'error',
-        source,
-        expected: 'string[]',
-        actual: describeType(value.args),
+        expected: 'boolean',
+        actual: describeType(value.enabled),
       });
     }
     if (value.timeoutMs !== undefined && (typeof value.timeoutMs !== 'number' || value.timeoutMs < 0)) {
@@ -338,9 +342,87 @@ function validateMcpServers(
         actual: describeType(value.timeoutMs),
       });
     }
+    if (value.args !== undefined && (!Array.isArray(value.args) || !value.args.every(item => typeof item === 'string'))) {
+      issues.push({
+        path: `${base}.args`,
+        message: 'args must be a string array.',
+        severity: 'error',
+        source,
+        expected: 'string[]',
+        actual: describeType(value.args),
+      });
+    }
+    if (value.env !== undefined) validateStringRecord(`${base}.env`, value.env, source, issues);
+    if (value.headers !== undefined) validateStringRecord(`${base}.headers`, value.headers, source, issues);
+
+    if (type === 'stdio') {
+      if (typeof value.command !== 'string' || value.command.trim() === '') {
+        issues.push({
+          path: `${base}.command`,
+          message: 'stdio MCP server requires command.',
+          severity: 'error',
+          source,
+          expected: 'non-empty string',
+          actual: describeType(value.command),
+        });
+      }
+      continue;
+    }
+
+    if (type === 'sse' || type === 'http') {
+      if (typeof value.url !== 'string' || !isValidHttpUrl(value.url)) {
+        issues.push({
+          path: `${base}.url`,
+          message: `${type.toUpperCase()} MCP server requires an http(s) URL.`,
+          severity: 'error',
+          source,
+          expected: 'http(s) URL',
+          actual: describeType(value.url),
+        });
+      }
+    }
   }
 }
 
+function validateStringRecord(
+  path: string,
+  value: unknown,
+  source: ConfigSourceKind | undefined,
+  issues: ConfigValidationIssue[],
+): void {
+  if (!isPlainObject(value)) {
+    issues.push({
+      path,
+      message: 'Value must be an object with string values.',
+      severity: 'error',
+      source,
+      expected: 'Record<string, string>',
+      actual: describeType(value),
+    });
+    return;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    if (typeof nested !== 'string') {
+      issues.push({
+        path: `${path}.${key}`,
+        message: 'Record values must be strings.',
+        severity: 'error',
+        source,
+        expected: 'string',
+        actual: describeType(nested),
+      });
+    }
+  }
+}
+
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 function ruleToExpected(rule: FieldRule): string {
   return rule.enumValues ? rule.enumValues.join(' | ') : rule.type;
 }

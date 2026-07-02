@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { McpServerDefinition } from './types.js';
+import type { McpClientTransport } from './transports/types.js';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -15,13 +16,17 @@ interface JsonRpcResponse {
   error?: { code?: number; message?: string; data?: unknown };
 }
 
-export class McpStdioClient {
+export class McpStdioClient implements McpClientTransport {
   private child: ChildProcessWithoutNullStreams | null = null;
   private nextId = 1;
   private buffer = '';
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
 
-  constructor(private readonly server: McpServerDefinition, private readonly cwd: string) {}
+  readonly server: McpServerDefinition;
+
+  constructor(server: McpServerDefinition, private readonly cwd: string) {
+    this.server = server;
+  }
 
   async listTools(): Promise<unknown[]> {
     await this.ensureStarted();
@@ -57,7 +62,10 @@ export class McpStdioClient {
 
   private async ensureStarted(): Promise<void> {
     if (this.child) return;
-    this.child = spawn(this.server.command, this.server.args ?? [], {
+    if ((this.server.type ?? 'stdio') !== 'stdio') throw new Error(`McpStdioClient cannot run ${this.server.type} transport.`);
+    const command = this.server.command?.trim();
+    if (!command) throw new Error(`stdio MCP server requires command: ${this.server.name}`);
+    this.child = spawn(command, this.server.args ?? [], {
       cwd: this.cwd,
       env: { ...process.env, ...this.server.env },
       shell: false,
