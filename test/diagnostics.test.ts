@@ -76,6 +76,59 @@ test('diagnostics displays provider request id, retry-after, and fallback advice
   assert.ok(output.includes('gpt-fallback')); 
 });
 
+test('diagnostics surfaces tool result pairing repair statistics', async () => {
+  const output = await captureConsole(async () => {
+    await renderDiagnosticsCommand({
+      language: 'zh-CN',
+      configManager: fakeConfigManager({
+        ...DEFAULT_CONFIG,
+        llm: { provider: 'compatible', model: 'gpt-contract', fallbackModels: [], apiKey: 'test-key', baseUrl: 'https://example.test/v1' },
+      }),
+      contextManager: fakeContextManager(),
+      llmProvider: fakeProvider(),
+      characterManager: fakeCharacterManager(),
+      getCommandCount: () => 12,
+      getRuntimeSnapshot: () => ({
+        ...baseRuntime(),
+        operations: {
+          ...baseRuntime().operations,
+          toolResultPairing: {
+            totalRepairs: 1,
+            insertedSyntheticResults: 1,
+            removedOrphanResults: 2,
+            removedDuplicateToolUses: 1,
+            removedDuplicateToolResults: 1,
+            last: {
+              originalMessageCount: 4,
+              repairedMessageCount: 5,
+              insertedSyntheticResults: 1,
+              removedOrphanResults: 2,
+              removedDuplicateToolUses: 1,
+              removedDuplicateToolResults: 1,
+              at: Date.now(),
+            },
+          },
+        },
+      }),
+      getMemoryStats: async () => ({
+        enabled: true,
+        total: 0,
+        manual: 0,
+        auto: 0,
+        global: 0,
+        project: 0,
+        archived: 0,
+        byType: { user: 0, project: 0, feedback: 0, reference: 0, learning: 0, workflow: 0 },
+      }),
+    });
+  });
+
+  assert.match(output, /\u5de5\u5177\u6d88\u606f\u914d\u5bf9\u53d1\u751f\u8fc7\u81ea\u52a8\u4fee\u590d/);
+  assert.match(output, /synthetic=1/);
+  assert.match(output, /orphan=2/);
+  assert.match(output, /duplicate=2/);
+  assert.ok(output.includes('/rewind'));
+});
 test('diagnostics keeps generic advice for non-provider runtime errors', async () => {
   const output = await captureConsole(async () => {
     await renderDiagnosticsCommand({
@@ -214,6 +267,13 @@ function baseRuntime(): RuntimeStateSnapshot {
       slowOperations: [],
       recentErrors: [],
       queryProfiles: { slowProfiles: [] },
+      toolResultPairing: {
+        totalRepairs: 0,
+        insertedSyntheticResults: 0,
+        removedOrphanResults: 0,
+        removedDuplicateToolUses: 0,
+        removedDuplicateToolResults: 0,
+      },
     },
     telemetry: { enabled: false, path: 'disabled', eventCount: 0, droppedEvents: 0 },
   };

@@ -721,6 +721,11 @@ async function renderStatusCommand(options: BuiltinCommandFactoryOptions): Promi
     console.log(`  ${isZh ? '\u6269\u5c55' : 'Extensions'}: plugins ${runtime.extensions.plugins.enabled}/${runtime.extensions.plugins.disabled}, hooks ${runtime.extensions.hooks.count}, MCP ${runtime.extensions.mcp.servers} servers / ${runtime.extensions.mcp.tools} tools`);
     console.log(`  ${isZh ? '\u5de5\u5177' : 'Tools'}: builtin ${runtime.extensions.tools.builtin}, MCP ${runtime.extensions.tools.mcp}, total ${runtime.extensions.tools.total}`);
     console.log(`  ${isZh ? '\u5de5\u5177\u8c03\u7528' : 'Tool calls'}: ${runtime.operations.tools.totalCalls} total / ${runtime.operations.tools.failedCalls} failed / ${formatElapsed(runtime.operations.tools.totalDurationMs)} total`);
+    const pairing = runtime.operations.toolResultPairing;
+    if (pairing.totalRepairs > 0) {
+      const duplicate = pairing.removedDuplicateToolUses + pairing.removedDuplicateToolResults;
+      console.log(chalk.yellow(`  ${isZh ? '\u5de5\u5177\u6d88\u606f\u4fee\u590d' : 'Tool message repairs'}: ${pairing.totalRepairs} total / synthetic=${pairing.insertedSyntheticResults} / orphan=${pairing.removedOrphanResults} / duplicate=${duplicate}`));
+    }
     if (runtime.operations.tools.turnCalls > 0) console.log(chalk.dim(`  ${isZh ? '\u672c\u8f6e\u5de5\u5177' : 'Turn tools'}: ${runtime.operations.tools.turnCalls} calls / ${formatElapsed(runtime.operations.tools.turnDurationMs)}`));
     if (runtime.operations.tools.last) console.log(chalk.dim(`  ${isZh ? '\u6700\u8fd1\u5de5\u5177' : 'Last tool'}: ${runtime.operations.tools.last.name} ${runtime.operations.tools.last.success ? 'OK' : 'ERR'} / ${formatElapsed(runtime.operations.tools.last.durationMs)}`));
     console.log(`  Hooks: ${runtime.operations.hooks.totalRuns} runs / ${runtime.operations.hooks.blockedRuns} blocked / ${runtime.operations.hooks.errorRuns} error / ${formatElapsed(runtime.operations.hooks.totalDurationMs)} total`);

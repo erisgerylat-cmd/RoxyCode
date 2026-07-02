@@ -42,6 +42,7 @@ export async function renderDiagnosticsCommand(options: DiagnosticsCommandOption
   checks.push(...diagnoseConfig(options));
   checks.push(...diagnoseModel(options, runtime));
   checks.push(...diagnoseWorkspaceExecution(options, runtime));
+  checks.push(...diagnoseToolResultPairing(runtime, isZh));
   checks.push(...diagnoseToolScheduling(options));
   checks.push(...diagnoseQueryProfile(runtime, isZh));
   checks.push(...diagnoseSecurity(options));
@@ -304,6 +305,36 @@ function diagnoseWorkspaceExecution(options: DiagnosticsCommandOptions, runtime?
   return checks;
 }
 
+function diagnoseToolResultPairing(runtime: RuntimeStateSnapshot | undefined, isZh: boolean): DiagnosticCheck[] {
+  if (!runtime) return [];
+  const pairing = runtime.operations.toolResultPairing;
+  if (!pairing || pairing.totalRepairs === 0) {
+    return [{
+      severity: 'pass',
+      title: isZh ? '\u5de5\u5177\u6d88\u606f\u914d\u5bf9\u6ca1\u6709\u81ea\u52a8\u4fee\u590d' : 'Tool message pairing had no repairs',
+      detail: isZh
+        ? '\u672c\u4f1a\u8bdd\u7684 Provider \u8bf7\u6c42\u524d\u6ca1\u6709\u68c0\u6d4b\u5230 tool_use/tool_result \u4e0d\u914d\u5bf9\u3002'
+        : 'No tool_use/tool_result pairing repairs were needed before provider requests.',
+    }];
+  }
+
+  const duplicate = pairing.removedDuplicateToolUses + pairing.removedDuplicateToolResults;
+  const last = pairing.last
+    ? `last=${pairing.last.originalMessageCount}->${pairing.last.repairedMessageCount} messages`
+    : 'last=unknown';
+  return [{
+    severity: pairing.insertedSyntheticResults > 0 ? 'warning' : 'info',
+    title: isZh ? '\u5de5\u5177\u6d88\u606f\u914d\u5bf9\u53d1\u751f\u8fc7\u81ea\u52a8\u4fee\u590d' : 'Tool message pairing was automatically repaired',
+    detail: `repairs=${pairing.totalRepairs}, synthetic=${pairing.insertedSyntheticResults}, orphan=${pairing.removedOrphanResults}, duplicate=${duplicate}, ${last}`,
+    action: pairing.insertedSyntheticResults > 0
+      ? (isZh
+          ? '\u5982\u679c\u4e0b\u4e00\u6b21\u56de\u7b54\u4e0d\u8fde\u8d2f\uff0c\u5148\u7528 /rewind \u56de\u9000\u6700\u8fd1\u4e00\u8f6e\uff0c\u518d\u7528 /resume \u6216\u91cd\u65b0\u53d1\u9001\u4efb\u52a1\uff1b\u540c\u65f6\u68c0\u67e5\u4f1a\u8bdd\u6062\u590d\u548c\u4e0a\u4e0b\u6587\u538b\u7f29\u8def\u5f84\u3002'
+          : 'If the next answer looks inconsistent, use /rewind for the latest turn, then /resume or resend the task; inspect session resume and context compaction paths.')
+      : (isZh
+          ? '\u8fd9\u7c7b\u4fee\u590d\u901a\u5e38\u662f\u6e05\u7406\u5b64\u7acb\u6216\u91cd\u590d\u5de5\u5177\u6d88\u606f\uff1b\u5982\u679c\u9891\u7e41\u51fa\u73b0\uff0c\u68c0\u67e5\u81ea\u5b9a\u4e49\u5de5\u5177\u3001MCP \u6216\u4f1a\u8bdd\u5bfc\u5165\u903b\u8f91\u3002'
+          : 'This usually cleans orphan or duplicate tool messages. If frequent, inspect custom tools, MCP adapters, or session import logic.'),
+  }];
+}
 function buildProviderErrorAdvice(
   error: RuntimeStateSnapshot['operations']['recentErrors'][number],
   isZh: boolean,

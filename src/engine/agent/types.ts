@@ -1,6 +1,6 @@
 import type { Character } from '../../aesthetic/character/types.js';
 import type { RoxyCodeConfig } from '../../core/types/config.js';
-import type { LLMProvider, LLMUsage } from '../../core/types/llm.js';
+import type { LLMProvider, LLMToolResultPairingRepair, LLMUsage } from '../../core/types/llm.js';
 import type { Message, ToolCall, ToolResult } from '../../core/types/message.js';
 import type { ContextManager } from '../../session/context/ContextManager.js';
 import type { HookRunner } from '../../hooks/types.js';
@@ -15,6 +15,7 @@ export type AgentLoopEvent =
   | MultiAgentEvent
   | { type: 'mode_start'; mode: AgentLoopMode; label: string; description: string }
   | { type: 'model_request_start'; phase: 'planning' | 'response' | 'tool_loop' | 'verification'; iteration?: number }
+  | { type: 'tool_result_pairing_repaired'; report: LLMToolResultPairingRepair }
   | { type: 'planning'; text: string }
   | { type: 'text_delta'; text: string }
   | { type: 'assistant_message'; text: string }

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * LLM Provider 鎺ュ彛涓庣浉鍏崇被鍨?
  *
  * [EXTENSION POINT] 鐢ㄦ埛鍙€氳繃瀹炵幇 LLMProvider 鎺ュ彛鎺ュ叆鏂扮殑 LLM銆?
@@ -38,11 +38,21 @@ export type LLMChunk =
 
 export type LLMToolChoice = 'auto' | 'none' | { type: 'function'; name: string };
 
+export interface LLMToolResultPairingRepair {
+  originalMessageCount: number;
+  repairedMessageCount: number;
+  insertedSyntheticResults: number;
+  removedOrphanResults: number;
+  removedDuplicateToolUses: number;
+  removedDuplicateToolResults: number;
+}
+
 /** LLM 璋冪敤閫夐」 */
 export interface LLMCallOptions {
   messages: Message[];
   tools?: ToolDefinition[];
   toolChoice?: LLMToolChoice;
+  onToolResultPairingRepair?: (report: LLMToolResultPairingRepair) => void | Promise<void>;
   temperature?: number;
   topP?: number;
   maxTokens?: number;

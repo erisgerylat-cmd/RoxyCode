@@ -19,6 +19,8 @@ export type {
   RuntimeStateInit,
   RuntimeStateSnapshot,
   RuntimeToolStatsSnapshot,
+  RuntimeToolResultPairingRepairSnapshot,
+  RuntimeToolResultPairingSnapshot,
   RuntimeUsageSnapshot,
 } from './RuntimeState.js';
 export { QueryProfiler, formatQueryProfile } from './QueryProfiler.js';

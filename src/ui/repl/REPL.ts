@@ -574,6 +574,12 @@ export class REPL {
         attributes.phase = event.phase;
         attributes.iteration = event.iteration;
         break;
+      case 'tool_result_pairing_repaired':
+        name = 'llm.tool_result_pairing_repaired';
+        category = 'llm';
+        success = true;
+        Object.assign(attributes, event.report);
+        break;
       case 'tool_call_start':
         name = 'tool.call_start';
         category = 'tool';
@@ -728,6 +734,14 @@ export class REPL {
         console.log(accent(`\n  ${zh ? zhText('verification') : 'Verification'}`));
         console.log(indentBlock(event.text));
         break;
+      case 'tool_result_pairing_repaired': {
+        this.clearStatusBar();
+        const duplicate = event.report.removedDuplicateToolUses + event.report.removedDuplicateToolResults;
+        const label = zh ? '\u5de5\u5177\u6d88\u606f\u914d\u5bf9\u5df2\u81ea\u52a8\u4fee\u590d' : 'Tool message pairing repaired';
+        console.log(dim(`  ${label}: synthetic=${event.report.insertedSyntheticResults}, orphan=${event.report.removedOrphanResults}, duplicate=${duplicate}`));
+        this.startStatusBar('analyzing', zh ? '\u5de5\u5177\u6d88\u606f\u914d\u5bf9\u5df2\u4fee\u590d' : 'Tool pairing repaired');
+        break;
+      }
       case 'context_compacted':
         this.clearStatusBar();
         console.log(dim(`  ${zh ? '\u4e0a\u4e0b\u6587\u5df2\u81ea\u52a8\u538b\u7f29' : 'Context compacted'}: ${event.beforeTokens.toLocaleString()} -> ${event.afterTokens.toLocaleString()} tokens (${event.layer})`));
@@ -813,6 +827,9 @@ export class REPL {
             error: event.result.error,
           },
         });
+        break;
+      case 'tool_result_pairing_repaired':
+        await this.sessionStore.append({ type: 'note', note: 'tool result pairing repaired', metadata: { ...event.report } });
         break;
       case 'context_compacted':
         await this.sessionStore.append({ type: 'note', note: 'context compacted', metadata: { layer: event.layer, beforeTokens: event.beforeTokens, afterTokens: event.afterTokens } });

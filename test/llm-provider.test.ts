@@ -4,7 +4,7 @@ import type { ServerResponse } from 'node:http';
 import { test } from 'node:test';
 
 import { toolResultMessage, userMessage, type Message, type ToolCall, type ToolResult } from '../src/core/types/message.js';
-import type { LLMChunk } from '../src/core/types/llm.js';
+import type { LLMChunk, LLMToolResultPairingRepair } from '../src/core/types/llm.js';
 import type { ToolDefinition } from '../src/tool/types.js';
 import { LLMError } from '../src/engine/llm/BaseLLMProvider.js';
 import { OpenAIProvider } from '../src/engine/llm/OpenAIProvider.js';
@@ -113,7 +113,17 @@ test('OpenAI-compatible provider repairs missing tool_result before sending requ
     { role: 'assistant', content: [{ type: 'tool_use', toolCall }], timestamp: 1 },
   ];
 
-  const body = await captureProviderRequest(messages);
+  const repairs: LLMToolResultPairingRepair[] = [];
+  const body = await captureProviderRequest(messages, {
+    onToolResultPairingRepair: report => { repairs.push(report); },
+  });
+  assert.equal(repairs.length, 1);
+  assert.equal(repairs[0].originalMessageCount, 2);
+  assert.equal(repairs[0].repairedMessageCount, 3);
+  assert.equal(repairs[0].insertedSyntheticResults, 1);
+  assert.equal(repairs[0].removedOrphanResults, 0);
+  assert.equal(repairs[0].removedDuplicateToolUses, 0);
+  assert.equal(repairs[0].removedDuplicateToolResults, 0);
   assert.equal(body.messages.length, 3);
   assert.deepEqual(body.messages[1].tool_calls, [{
     id: 'call_missing',
@@ -405,7 +415,10 @@ test('optional real OpenAI-compatible provider tool_call smoke test', { skip: sh
   assert.equal(toolCall.arguments.path, 'README.md');
 });
 
-async function captureProviderRequest(messages: Message[]): Promise<Record<string, any>> {
+async function captureProviderRequest(
+  messages: Message[],
+  options: { onToolResultPairingRepair?: (report: LLMToolResultPairingRepair) => void } = {},
+): Promise<Record<string, any>> {
   let captured: Record<string, any> | undefined;
   const server = createServer(async (req, res) => {
     captured = JSON.parse(await readBody(req)) as Record<string, any>;
@@ -420,7 +433,7 @@ async function captureProviderRequest(messages: Message[]): Promise<Record<strin
   const baseUrl = await listen(server);
   try {
     const provider = new OpenAIProvider({ apiKey: 'test-key', baseUrl, model: 'gpt-contract' });
-    await provider.chat({ messages, tools: [fakeTool], temperature: 0 });
+    await provider.chat({ messages, tools: [fakeTool], temperature: 0, onToolResultPairingRepair: options.onToolResultPairingRepair });
     assert.ok(captured);
     return captured;
   } finally {

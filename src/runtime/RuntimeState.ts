@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { CharacterId } from '../aesthetic/character/types.js';
 import type { RoxyCodeConfig } from '../core/types/config.js';
-import type { LLMUsage } from '../core/types/llm.js';
+import type { LLMToolResultPairingRepair, LLMUsage } from '../core/types/llm.js';
 import type { ToolCall, ToolResult } from '../core/types/message.js';
 import type { Language } from '../i18n/index.js';
 import type { HookExecutionRecord, RoxyHookEvent } from '../hooks/types.js';
@@ -82,6 +82,19 @@ export interface RuntimeProviderDiagnosticsSnapshot {
   at: number;
 }
 
+export interface RuntimeToolResultPairingRepairSnapshot extends LLMToolResultPairingRepair {
+  at: number;
+}
+
+export interface RuntimeToolResultPairingSnapshot {
+  totalRepairs: number;
+  insertedSyntheticResults: number;
+  removedOrphanResults: number;
+  removedDuplicateToolUses: number;
+  removedDuplicateToolResults: number;
+  last?: RuntimeToolResultPairingRepairSnapshot;
+}
+
 export interface RuntimeLastToolSnapshot {
   name: string;
   durationMs: number;
@@ -144,6 +157,7 @@ export interface RuntimeOperationsSnapshot {
   slowOperations: RuntimeSlowOperationSnapshot[];
   recentErrors: RuntimeErrorSnapshot[];
   queryProfiles: RuntimeQueryProfileSnapshot;
+  toolResultPairing: RuntimeToolResultPairingSnapshot;
 }
 
 export interface RuntimeStateSnapshot {
@@ -215,6 +229,7 @@ export class RuntimeState {
   private hookStats: RuntimeHookStatsSnapshot = emptyHookStats();
   private slowOperations: RuntimeSlowOperationSnapshot[] = [];
   private recentErrors: RuntimeErrorSnapshot[] = [];
+  private toolResultPairingStats: RuntimeToolResultPairingSnapshot = emptyToolResultPairingStats();
   private lastQueryProfile?: QueryProfileSummary;
   private slowQueryProfiles: QueryProfileSummary[] = [];
   private telemetry?: TelemetrySnapshot;
@@ -303,13 +318,16 @@ export class RuntimeState {
     this.touch();
   }
 
-  recordAgentEvent(event: { type: string; usage?: LLMUsage; error?: Error; toolCall?: ToolCall; result?: unknown; profile?: unknown }): void {
+  recordAgentEvent(event: { type: string; usage?: LLMUsage; error?: Error; toolCall?: ToolCall; result?: unknown; profile?: unknown; report?: unknown }): void {
     switch (event.type) {
       case 'context_compacted':
         this.agent.contextCompactions += 1;
         break;
       case 'token_budget_continue':
         this.agent.tokenBudgetContinuations += 1;
+        break;
+      case 'tool_result_pairing_repaired':
+        if (isToolResultPairingRepair(event.report)) this.recordToolResultPairingRepair(event.report);
         break;
       case 'tool_result':
         if (isToolResult(event.result)) {
@@ -340,6 +358,18 @@ export class RuntimeState {
         break;
       }
     }
+    this.touch();
+  }
+
+  recordToolResultPairingRepair(report: LLMToolResultPairingRepair): void {
+    this.toolResultPairingStats = {
+      totalRepairs: this.toolResultPairingStats.totalRepairs + 1,
+      insertedSyntheticResults: this.toolResultPairingStats.insertedSyntheticResults + report.insertedSyntheticResults,
+      removedOrphanResults: this.toolResultPairingStats.removedOrphanResults + report.removedOrphanResults,
+      removedDuplicateToolUses: this.toolResultPairingStats.removedDuplicateToolUses + report.removedDuplicateToolUses,
+      removedDuplicateToolResults: this.toolResultPairingStats.removedDuplicateToolResults + report.removedDuplicateToolResults,
+      last: { ...report, at: Date.now() },
+    };
     this.touch();
   }
 
@@ -472,6 +502,7 @@ export class RuntimeState {
           last: this.lastQueryProfile ? cloneQueryProfile(this.lastQueryProfile) : undefined,
           slowProfiles: this.slowQueryProfiles.map(profile => cloneQueryProfile(profile)),
         },
+        toolResultPairing: cloneToolResultPairingStats(this.toolResultPairingStats),
       },
       telemetry: this.telemetry ? { ...this.telemetry, lastEvent: this.telemetry.lastEvent ? { ...this.telemetry.lastEvent } : undefined } : undefined,
     };
@@ -554,6 +585,20 @@ function cloneToolStats(snapshot: RuntimeToolStatsSnapshot): RuntimeToolStatsSna
 function cloneHookStats(snapshot: RuntimeHookStatsSnapshot): RuntimeHookStatsSnapshot {
   return { ...snapshot, last: snapshot.last ? { ...snapshot.last } : undefined };
 }
+function emptyToolResultPairingStats(): RuntimeToolResultPairingSnapshot {
+  return {
+    totalRepairs: 0,
+    insertedSyntheticResults: 0,
+    removedOrphanResults: 0,
+    removedDuplicateToolUses: 0,
+    removedDuplicateToolResults: 0,
+  };
+}
+
+function cloneToolResultPairingStats(snapshot: RuntimeToolResultPairingSnapshot): RuntimeToolResultPairingSnapshot {
+  return { ...snapshot, last: snapshot.last ? { ...snapshot.last } : undefined };
+}
+
 function isToolResult(value: unknown): value is ToolResult {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
@@ -568,6 +613,17 @@ function cloneQueryProfile(profile: QueryProfileSummary): QueryProfileSummary {
     checkpoints: profile.checkpoints.map(checkpoint => ({ ...checkpoint, memory: checkpoint.memory ? { ...checkpoint.memory } : undefined })),
     phases: profile.phases.map(phase => ({ ...phase })),
   };
+}
+
+function isToolResultPairingRepair(value: unknown): value is LLMToolResultPairingRepair {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.originalMessageCount === 'number'
+    && typeof record.repairedMessageCount === 'number'
+    && typeof record.insertedSyntheticResults === 'number'
+    && typeof record.removedOrphanResults === 'number'
+    && typeof record.removedDuplicateToolUses === 'number'
+    && typeof record.removedDuplicateToolResults === 'number';
 }
 
 function isQueryProfile(value: unknown): value is QueryProfileSummary {

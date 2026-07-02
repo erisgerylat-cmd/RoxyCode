@@ -1,4 +1,4 @@
-﻿import type { LLMUsage } from '../../core/types/llm.js';
+import type { LLMToolResultPairingRepair, LLMUsage } from '../../core/types/llm.js';
 import {
   assistantMessage,
   systemMessage,
@@ -27,6 +27,8 @@ export class AgentLoop {
     const tokenBudget = parseTokenBudget(input.userInput);
     const userInput = stripTokenBudgetDirective(input.userInput) || input.userInput;
     const budgetTracker = createBudgetTracker();
+    const pairingRepairs: LLMToolResultPairingRepair[] = [];
+    const onToolResultPairingRepair = (report: LLMToolResultPairingRepair): void => { pairingRepairs.push(report); };
     const profiler = new QueryProfiler(input.mode);
     yield { type: 'mode_start', mode: spec.mode, label: spec.label, description: spec.description };
 
@@ -112,7 +114,9 @@ export class AgentLoop {
             userMessage(buildPlanPrompt(userInput, this.options.language)),
           ],
           signal: this.options.signal,
+          onToolResultPairingRepair,
         });
+        yield* drainPairingRepairs(pairingRepairs);
         profiler.mark('query_first_chunk_received', 'planning');
         profiler.mark('query_model_request_end', 'planning');
         totalUsage = addUsage(totalUsage, planResult.usage);
@@ -121,11 +125,11 @@ export class AgentLoop {
       }
 
       if (spec.allowTools && this.options.llmProvider.supportsTools) {
-        const loopResult = yield* this.runToolLoop(messages, spec.maxIterations, input.mode, tokenBudget, budgetTracker, totalUsage, profiler);
+        const loopResult = yield* this.runToolLoop(messages, spec.maxIterations, input.mode, tokenBudget, budgetTracker, totalUsage, profiler, pairingRepairs, onToolResultPairingRepair);
         messages = loopResult.messages;
         totalUsage = addUsage(totalUsage, loopResult.usage);
       } else {
-        const liteResult = yield* this.runLiteLoop(messages, tokenBudget, budgetTracker, totalUsage, profiler);
+        const liteResult = yield* this.runLiteLoop(messages, tokenBudget, budgetTracker, totalUsage, profiler, pairingRepairs, onToolResultPairingRepair);
         messages = liteResult.messages;
         totalUsage = addUsage(totalUsage, liteResult.usage);
       }
@@ -138,7 +142,9 @@ export class AgentLoop {
         const verification = await this.options.llmProvider.chat({
           messages: prepared.messages,
           signal: this.options.signal,
+          onToolResultPairingRepair,
         });
+        yield* drainPairingRepairs(pairingRepairs);
         profiler.mark('query_first_chunk_received', 'verification');
         profiler.mark('query_model_request_end', 'verification');
         totalUsage = addUsage(totalUsage, verification.usage);
@@ -190,6 +196,7 @@ export class AgentLoop {
       profiler.mark('query_error');
       const profile = profiler.snapshot();
       this.options.telemetry?.log({ name: 'query.profile', category: 'agent', durationMs: profile.totalMs, success: false, attributes: profileTelemetryAttributes(profile) }).catch(() => undefined);
+      yield* drainPairingRepairs(pairingRepairs);
       yield { type: 'error', error: error instanceof Error ? error : new Error(String(error)), profile };
     }
   }
@@ -214,6 +221,8 @@ export class AgentLoop {
     budgetTracker: BudgetTracker,
     baseUsage: LLMUsage,
     profiler: QueryProfiler,
+    pairingRepairs: LLMToolResultPairingRepair[],
+    onToolResultPairingRepair: (report: LLMToolResultPairingRepair) => void,
   ): AsyncIterable<AgentLoopEvent, { messages: Message[]; usage: LLMUsage }> {
     let messages = initialMessages;
     let totalUsage = { ...ZERO_USAGE };
@@ -228,7 +237,9 @@ export class AgentLoop {
       const result = await this.options.llmProvider.chat({
         messages: prepared.messages,
         signal: this.options.signal,
+        onToolResultPairingRepair,
       });
+      yield* drainPairingRepairs(pairingRepairs);
       profiler.mark('query_first_chunk_received', label);
       profiler.mark('query_model_request_end', label);
       totalUsage = addUsage(totalUsage, result.usage);
@@ -267,6 +278,8 @@ export class AgentLoop {
     budgetTracker: BudgetTracker,
     baseUsage: LLMUsage,
     profiler: QueryProfiler,
+    pairingRepairs: LLMToolResultPairingRepair[],
+    onToolResultPairingRepair: (report: LLMToolResultPairingRepair) => void,
   ): AsyncIterable<AgentLoopEvent, { messages: Message[]; usage: LLMUsage }> {
     let messages = initialMessages;
     let totalUsage = { ...ZERO_USAGE };
@@ -289,6 +302,7 @@ export class AgentLoop {
         messages: compacted,
         tools: this.options.tools,
         signal: this.options.signal,
+        onToolResultPairingRepair,
       })) {
         if (chunk.type === 'text') {
           if (!firstChunkSeen) {
@@ -315,6 +329,8 @@ export class AgentLoop {
           totalUsage = addUsage(totalUsage, chunk.usage);
         }
       }
+
+      yield* drainPairingRepairs(pairingRepairs);
 
       const assistantContent = [
         ...(assistantText ? [{ type: 'text' as const, text: assistantText }] : []),
@@ -420,6 +436,10 @@ export class AgentLoop {
       },
     };
   }
+}
+
+function drainPairingRepairs(reports: LLMToolResultPairingRepair[]): AgentLoopEvent[] {
+  return reports.splice(0).map(report => ({ type: 'tool_result_pairing_repaired', report }));
 }
 
 function addUsage(a: LLMUsage, b: LLMUsage): LLMUsage {

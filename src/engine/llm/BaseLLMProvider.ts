@@ -7,10 +7,11 @@ import type {
   LLMChunk,
   LLMUsage,
   LLMToolChoice,
+  LLMToolResultPairingRepair,
 } from '../../core/types/llm.js';
 import type { Message, ToolCall, MessageContent } from '../../core/types/message.js';
 import type { ToolDefinition } from '../../core/types/tool.js';
-import { normalizeToolResultPairing } from './ToolResultPairing.js';
+import { repairToolResultPairing, type ToolResultPairingReport } from './ToolResultPairing.js';
 
 interface OpenAIMessage {
   role: string;
@@ -142,9 +143,12 @@ export abstract class BaseLLMProvider implements LLMProvider {
   }
 
   protected buildRequest(options: LLMCallOptions, stream: boolean): ChatCompletionRequest {
+    const pairing = repairToolResultPairing(options.messages);
+    if (pairing.repaired) this.emitToolResultPairingRepair(options, pairing);
+
     const request: ChatCompletionRequest = {
       model: this.config.model,
-      messages: this.convertMessages(normalizeToolResultPairing(options.messages)),
+      messages: this.convertMessages(pairing.messages),
       stream,
       temperature: options.temperature ?? this.config.temperature ?? 0.7,
       top_p: options.topP ?? this.config.topP,
@@ -156,6 +160,29 @@ export abstract class BaseLLMProvider implements LLMProvider {
       if (options.toolChoice) request.tool_choice = this.convertToolChoice(options.toolChoice);
     }
     return request;
+  }
+
+  private emitToolResultPairingRepair(options: LLMCallOptions, report: ToolResultPairingReport): void {
+    const callback = options.onToolResultPairingRepair;
+    if (!callback) return;
+
+    const payload: LLMToolResultPairingRepair = {
+      originalMessageCount: options.messages.length,
+      repairedMessageCount: report.messages.length,
+      insertedSyntheticResults: report.insertedSyntheticResults,
+      removedOrphanResults: report.removedOrphanResults,
+      removedDuplicateToolUses: report.removedDuplicateToolUses,
+      removedDuplicateToolResults: report.removedDuplicateToolResults,
+    };
+
+    try {
+      const result = callback(payload);
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        void (result as Promise<void>).catch(() => undefined);
+      }
+    } catch {
+      // Pairing repair observability must never break the provider request.
+    }
   }
 
   protected convertMessages(messages: Message[]): OpenAIMessage[] {
