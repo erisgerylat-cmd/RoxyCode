@@ -1,6 +1,6 @@
 import { DEFAULT_CONFIG } from './types/config.js';
 
-export type ConfigSourceKind = 'default' | 'global' | 'project' | 'env' | 'session';
+export type ConfigSourceKind = 'default' | 'global' | 'project' | 'local' | 'env' | 'session';
 export type ConfigIssueSeverity = 'error' | 'warning';
 
 export interface ConfigValidationIssue {

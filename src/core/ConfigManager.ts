@@ -11,7 +11,7 @@ import {
 } from './configSchema.js';
 import { DEFAULT_CONFIG, type RoxyCodeConfig } from './types/config.js';
 
-export type ConfigScope = 'global' | 'project';
+export type ConfigScope = 'global' | 'project' | 'local';
 
 export interface ConfigSetOptions {
   scope?: ConfigScope;
@@ -20,6 +20,7 @@ export interface ConfigSetOptions {
 export interface ConfigPathSnapshot {
   global: string;
   project: string;
+  local: string;
 }
 
 export interface ConfigSourceInfo {
@@ -42,12 +43,13 @@ interface ConfigFileReadResult {
   issues: ConfigValidationIssue[];
 }
 
-const SOURCE_PRECEDENCE: ConfigSourceKind[] = ['default', 'global', 'project', 'env', 'session'];
+const SOURCE_PRECEDENCE: ConfigSourceKind[] = ['default', 'global', 'project', 'local', 'env', 'session'];
 
 export class ConfigManager {
   private config: RoxyCodeConfig;
   private globalConfig: Partial<RoxyCodeConfig> = {};
   private projectConfig: Partial<RoxyCodeConfig> = {};
+  private localConfig: Partial<RoxyCodeConfig> = {};
   private envConfig: Partial<RoxyCodeConfig> = {};
   private sessionConfig: Partial<RoxyCodeConfig> = {};
   private sourceMap = new Map<string, ConfigSourceInfo>();
@@ -55,10 +57,14 @@ export class ConfigManager {
   private issues: ConfigValidationIssue[] = [];
   private readonly globalConfigPath: string;
   private readonly projectConfigPath: string;
+  private readonly localConfigPath: string;
+  private readonly cwd: string;
 
   constructor(cwd: string = process.cwd()) {
+    this.cwd = cwd;
     this.globalConfigPath = join(homedir(), '.roxycode', 'config.json');
     this.projectConfigPath = join(cwd, '.roxycode', 'config.json');
+    this.localConfigPath = join(cwd, '.roxycode', 'config.local.json');
     this.config = structuredClone(DEFAULT_CONFIG);
     this.rebuildEffectiveConfig();
   }
@@ -66,14 +72,19 @@ export class ConfigManager {
   async load(): Promise<void> {
     const global = await this.readConfigFile(this.globalConfigPath, 'global');
     const project = await this.readConfigFile(this.projectConfigPath, 'project');
+    const local = await this.readConfigFile(this.localConfigPath, 'local');
     this.globalConfig = global.config;
     this.projectConfig = project.config;
+    this.localConfig = local.config;
 
-    const base = deepMerge(deepMerge(structuredClone(DEFAULT_CONFIG), this.globalConfig), this.projectConfig);
+    const base = deepMerge(
+      deepMerge(deepMerge(structuredClone(DEFAULT_CONFIG), this.globalConfig), this.projectConfig),
+      this.localConfig,
+    );
     const env = this.readEnvConfig(base);
     this.envConfig = env.config;
     this.envSourceMap = env.sources;
-    this.issues = [...global.issues, ...project.issues, ...env.issues];
+    this.issues = [...global.issues, ...project.issues, ...local.issues, ...env.issues];
     this.rebuildEffectiveConfig();
   }
 
@@ -112,7 +123,7 @@ export class ConfigManager {
 
   async set(path: string, value: unknown, options: ConfigSetOptions = {}): Promise<void> {
     const scope = options.scope ?? (hasNestedValue(this.projectConfig as Record<string, unknown>, path) ? 'project' : 'global');
-    const target = scope === 'project' ? this.projectConfig : this.globalConfig;
+    const target = scope === 'local' ? this.localConfig : scope === 'project' ? this.projectConfig : this.globalConfig;
     const candidate = structuredClone(target);
     setNestedValue(candidate as Record<string, unknown>, path, value);
 
@@ -132,6 +143,7 @@ export class ConfigManager {
     return {
       global: this.globalConfigPath,
       project: this.projectConfigPath,
+      local: this.localConfigPath,
     };
   }
 
@@ -175,6 +187,9 @@ export class ConfigManager {
 
     this.config = deepMerge(this.config, this.projectConfig);
     this.recordLayerSources(this.projectConfig, 'project', { file: this.projectConfigPath });
+
+    this.config = deepMerge(this.config, this.localConfig);
+    this.recordLayerSources(this.localConfig, 'local', { file: this.localConfigPath });
 
     this.config = deepMerge(this.config, this.envConfig);
     this.recordLayerSources(this.envConfig, 'env');
@@ -315,10 +330,27 @@ export class ConfigManager {
   }
 
   private async saveScope(scope: ConfigScope): Promise<void> {
-    const path = scope === 'project' ? this.projectConfigPath : this.globalConfigPath;
-    const data = scope === 'project' ? this.projectConfig : this.globalConfig;
+    const path = scope === 'local' ? this.localConfigPath : scope === 'project' ? this.projectConfigPath : this.globalConfigPath;
+    const data = scope === 'local' ? this.localConfig : scope === 'project' ? this.projectConfig : this.globalConfig;
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, `${JSON.stringify(data, null, 2)}\n`, 'utf-8');
+    if (scope === 'local') await this.ensureLocalConfigGitignored();
+  }
+
+  private async ensureLocalConfigGitignored(): Promise<void> {
+    const gitignorePath = join(this.cwd, '.gitignore');
+    const current = existsSync(gitignorePath) ? await readFile(gitignorePath, 'utf-8') : '';
+    const rules = current
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => line.length > 0 && !line.startsWith('#'));
+    const alreadyIgnored = rules.some(rule =>
+      rule === '.roxycode' || rule === '.roxycode/' || rule === '.roxycode/*' || rule === '.roxycode/config.local.json'
+    );
+    if (alreadyIgnored) return;
+
+    const prefix = current.length === 0 || current.endsWith('\n') ? current : `${current}\n`;
+    await writeFile(gitignorePath, `${prefix}# RoxyCode local machine config\n.roxycode/config.local.json\n`, 'utf-8');
   }
 }
 

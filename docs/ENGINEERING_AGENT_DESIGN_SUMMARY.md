@@ -89,7 +89,10 @@ RoxyCode 实现位置：
 - 默认配置 `DEFAULT_CONFIG`
 - 全局配置：`~/.roxycode/config.json`
 - 项目配置：`<cwd>/.roxycode/config.json`
-- 项目配置覆盖全局配置，全局配置覆盖默认配置
+- 本地配置：`<cwd>/.roxycode/config.local.json`（机器私有，默认 gitignore）
+- 环境变量：`ROXY_*` / `OPENAI_*` / `DASHSCOPE_*` / `DEEPSEEK_*` / `GLM_*`
+- 会话配置：当前进程内覆盖
+- 生效优先级：`default < global < project < local < env < session`
 - 支持点路径读取和写入，例如：
 
 ```text
@@ -128,9 +131,9 @@ Claude Code 的设计重点：
 
 RoxyCode 的取舍：
 
-- 目前只做 global/project 两层。
-- 好处是更容易学习和调试。
-- 后续如果引入团队策略、企业策略、插件策略，可以参考 Claude Code 的 SettingSource 模型继续扩展。
+- 当前已实现 `default/global/project/local/env/session` 六层，local 对齐 Claude Code 的 `settings.local.json` 思路。
+- 好处是既保留团队共享配置，又允许每个用户在当前项目里做私有模型、角色和审美偏好覆盖。
+- 后续如果引入团队策略、企业策略、插件策略，可以参考 Claude Code 的 `policySettings` / managed settings 模型继续扩展。
 
 ## 4. 双语言机制
 
@@ -761,7 +764,7 @@ RoxyCode 实现位置：
 /memory auto off
 ```
 
-- global/project scope。
+- global/project/local scope。
 - Memory 注入 Agent Runtime Context。
 
 Claude Code 对应参考：

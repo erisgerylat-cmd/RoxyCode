@@ -485,7 +485,7 @@ export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): Co
       source: 'builtin',
       type: 'local',
       usage: text.config.usage,
-      examples: ['/config', '/config sources', '/config validate', '/config get ui.language --source', '/config set character.current roxy --scope project'],
+      examples: ['/config', '/config sources', '/config validate', '/config get ui.language --source', '/config set character.current roxy --scope local'],
       subcommands: [
         { name: 'get', description: isZh ? zh('readConfig') : 'Read a config value', needsInput: true },
         { name: 'set', description: isZh ? zh('writeConfig') : 'Write a config value', needsInput: true },
@@ -806,9 +806,10 @@ async function handleConfigCommand(args: string[], options: BuiltinCommandFactor
     renderConfigLine(options, 'llm.provider', snapshot.llm.provider);
     renderConfigLine(options, 'llm.model', snapshot.llm.model);
     renderConfigLine(options, 'mode', snapshot.mode);
-    console.log(chalk.dim(`  ${configLabel(isZh, 'precedence')}: default < global < project < env < session`));
+    console.log(chalk.dim(`  ${configLabel(isZh, 'precedence')}: default < global < project < local < env < session`));
     console.log(chalk.dim(`  ${configText.global}:  ${paths.global}`));
     console.log(chalk.dim(`  ${configText.project}: ${paths.project}`));
+    console.log(chalk.dim(`  ${configLabel(isZh, 'localConfig')}:   ${paths.local}`));
     if (!validation.ok || validation.issues.length > 0) {
       const errors = validation.issues.filter(issue => issue.severity === 'error').length;
       const warnings = validation.issues.filter(issue => issue.severity === 'warning').length;
@@ -824,6 +825,7 @@ async function handleConfigCommand(args: string[], options: BuiltinCommandFactor
     const paths = options.configManager.getPaths();
     console.log(`  ${configText.global}:  ${paths.global}`);
     console.log(`  ${configText.project}: ${paths.project}`);
+    console.log(`  ${configLabel(isZh, 'localConfig')}:   ${paths.local}`);
     console.log(chalk.dim('  env: ROXY_* / OPENAI_* / DASHSCOPE_* / DEEPSEEK_* / GLM_*'));
     console.log(chalk.dim(`  session: ${configLabel(isZh, 'sessionScope')}`));
     return;
@@ -915,7 +917,7 @@ function renderConfigSources(options: BuiltinCommandFactoryOptions): void {
   console.log('');
   console.log(chalk.bold(`  ${configLabel(isZh, 'sources')}`));
   console.log(chalk.dim(`  ${configLabel(isZh, 'precedence')}: ${snapshot.precedence.join(' < ')}`));
-  console.log(chalk.dim(`  ${configLabel(isZh, 'claudeReference')}: user/project/local/flag/policy source tracking.`));
+  console.log(chalk.dim(`  ${configLabel(isZh, 'claudeReference')}: user/project/local/flag/policy source tracking; RoxyCode uses global/project/local/env/session now.`));
   console.log('');
   for (const entry of snapshot.entries) {
     const detail = [entry.file, entry.env].filter(Boolean).join(' / ');
@@ -1006,7 +1008,8 @@ type ConfigLabelKey =
   | 'loadIssues'
   | 'valid'
   | 'exportInsideWorkspace'
-  | 'exported';
+  | 'exported'
+  | 'localConfig';
 
 const CONFIG_LABELS: Record<ConfigLabelKey, { zh: string; en: string }> = {
   precedence: { zh: '\u4f18\u5148\u7ea7', en: 'Precedence' },
@@ -1022,6 +1025,7 @@ const CONFIG_LABELS: Record<ConfigLabelKey, { zh: string; en: string }> = {
   valid: { zh: '\u914d\u7f6e\u6709\u6548\uff0c\u6ca1\u6709\u53d1\u73b0\u95ee\u9898\u3002', en: 'Configuration is valid.' },
   exportInsideWorkspace: { zh: '\u5bfc\u51fa\u8def\u5f84\u5fc5\u987b\u4f4d\u4e8e\u5f53\u524d\u9879\u76ee\u5185\u3002', en: 'Export path must stay inside the current project.' },
   exported: { zh: '\u5df2\u5bfc\u51fa\u8131\u654f\u914d\u7f6e', en: 'Redacted config exported' },
+  localConfig: { zh: '\u672c\u5730\u914d\u7f6e', en: 'Local config' },
 };
 
 function configLabel(isZh: boolean, key: ConfigLabelKey): string {
@@ -1066,7 +1070,7 @@ function parseConfigSetArgs(args: string[]): ParsedConfigSetArgs | FailedConfigS
 }
 
 function isConfigScope(value: unknown): value is ConfigScope {
-  return value === 'global' || value === 'project';
+  return value === 'global' || value === 'project' || value === 'local';
 }
 
 function parseConfigValue(raw: string): unknown {

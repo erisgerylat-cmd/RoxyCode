@@ -123,15 +123,20 @@ Acceptance:
 
 ### P1.3 Configuration Layers
 
+Status: Done in `feat: add local config layer`.
+
 Claude Code reference:
 
 - Settings have clear source precedence, validation, and managed policy support.
+- `userSettings -> projectSettings -> localSettings -> flagSettings -> policySettings` separates shared project settings from gitignored local overrides.
 
-RoxyCode plan:
+RoxyCode implementation:
 
-- Preserve current default/global/project/env/session precedence.
-- Add local gitignored config and profile layer visibility.
-- Defer enterprise policy until core UX is stable.
+- Effective precedence is now `default < global < project < local < env < session`.
+- Added `.roxycode/config.local.json` for machine-local project overrides.
+- `/config sources`, `/config paths`, and `/config validate` expose source, file, and env metadata.
+- `/config set <path> <value> --scope local` writes local config and ensures `.roxycode/config.local.json` is gitignored when needed.
+- Enterprise policy remains deferred until core UX and trust rules stabilize.
 
 Acceptance:
 
