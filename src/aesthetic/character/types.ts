@@ -15,6 +15,70 @@ export type ReviewFocus = 'correctness' | 'security' | 'performance' | 'maintain
 export type RiskPreference = 'conservative' | 'balanced' | 'bold';
 export type ExplanationStyle = 'concise' | 'structured' | 'teaching' | 'deep' | 'playful';
 export type PreferredAgentMode = 'lite' | 'economic' | 'standard' | 'ultimate';
+export type CharacterAgeRating = 'everyone' | '13+' | '16+' | '18+';
+
+export interface CharacterPackageInfo {
+  packageName: string;
+  version: string;
+  author: {
+    name: string;
+    email?: string;
+    url?: string;
+  };
+  license?: string;
+  repository?: string;
+  installPath: string;
+  installedAt: string;
+}
+
+export interface CharacterAssets {
+  icon?: string;
+  avatar?: string;
+  splashArt?: string[];
+  sprites?: {
+    idle?: string[];
+    thinking?: string[];
+    success?: string[];
+    warning?: string[];
+    error?: string[];
+  };
+  sounds?: {
+    notification?: string;
+    success?: string;
+    error?: string;
+  };
+}
+
+export interface CharacterExtensions {
+  hooks?: string;
+  workflows?: string[];
+  prompts?: {
+    systemPrompt?: string;
+    planPrompt?: string;
+    verificationPrompt?: string;
+  };
+  tools?: string[];
+}
+
+export interface CharacterI18n {
+  [locale: string]: {
+    name?: string;
+    title?: string;
+    description?: string;
+    personality?: string;
+    statusText?: Partial<StatusTextMap>;
+    easterEggs?: Partial<EasterEggPool>;
+    errorMessages?: Partial<ErrorMessages>;
+  };
+}
+
+export interface CharacterMetadata {
+  source?: string;
+  characterType?: string;
+  tags?: string[];
+  ageRating?: CharacterAgeRating;
+}
+
 
 export interface CharacterTheme {
   primary: string;
@@ -102,6 +166,11 @@ export interface Character {
   source?: CharacterSource;
   companion?: CharacterCompanion;
   behavior?: CharacterBehavior;
+  packageInfo?: CharacterPackageInfo;
+  assets?: CharacterAssets;
+  extensions?: CharacterExtensions;
+  i18n?: CharacterI18n;
+  metadata?: CharacterMetadata;
 }
 
 export interface CharacterSummary {

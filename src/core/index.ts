@@ -11,7 +11,18 @@ export * from './types/index.js';
 
 // ── 角色系统 ──
 export { CharacterManager } from '../aesthetic/character/CharacterManager.js';
-export type { Character, CharacterId, CharacterPort, CharacterSummary } from '../aesthetic/character/types.js';
+export type {
+  Character,
+  CharacterAgeRating,
+  CharacterAssets,
+  CharacterExtensions,
+  CharacterI18n,
+  CharacterId,
+  CharacterMetadata,
+  CharacterPackageInfo,
+  CharacterPort,
+  CharacterSummary,
+} from '../aesthetic/character/types.js';
 export type { CharacterTheme, StatusTextMap, SplashConfig, EasterEggPool, ErrorMessages } from '../aesthetic/character/types.js';
 export { ALL_CHARACTERS, CHARACTER_ORDER, getCharacter, getCharacterList } from '../aesthetic/character/characters/index.js';
 export { roxy, rudeus, eris, sylphiette, nanahoshi } from '../aesthetic/character/characters/index.js';

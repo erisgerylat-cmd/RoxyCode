@@ -2,6 +2,12 @@ export { CharacterManager } from './CharacterManager.js';
 export type {
   Character,
   CharacterId,
+  CharacterAgeRating,
+  CharacterAssets,
+  CharacterExtensions,
+  CharacterI18n,
+  CharacterMetadata,
+  CharacterPackageInfo,
   CharacterPort,
   CharacterSummary,
   CharacterTheme,
@@ -21,4 +27,3 @@ export {
   rudeus,
   sylphiette,
 } from './characters/index.js';
-
