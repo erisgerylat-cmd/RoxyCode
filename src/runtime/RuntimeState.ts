@@ -120,6 +120,8 @@ export interface RuntimeLastHookSnapshot {
   errors: number;
   at: number;
   reason?: string;
+  kinds?: string[];
+  characterOverlays?: string[];
 }
 
 export interface RuntimeHookStatsSnapshot {
@@ -396,6 +398,8 @@ export class RuntimeState {
   recordHookRun(input: RuntimeHookRunInput): void {
     const durationMs = Math.max(0, Math.round(input.duration));
     const errors = input.executions.filter(execution => execution.outcome === 'error').length;
+    const kinds = unique(input.executions.map(execution => execution.kind));
+    const characterOverlays = input.executions.filter(execution => execution.kind === 'character').map(execution => execution.hookId);
     this.hookStats = {
       totalRuns: this.hookStats.totalRuns + 1,
       blockedRuns: this.hookStats.blockedRuns + (input.blocked ? 1 : 0),
@@ -411,6 +415,8 @@ export class RuntimeState {
         errors,
         at: Date.now(),
         reason: input.reason,
+        kinds: kinds.length > 0 ? kinds : undefined,
+        characterOverlays: characterOverlays.length > 0 ? characterOverlays : undefined,
       },
     };
     if (input.blocked && input.reason) this.recordError(`hook:${input.event}`, input.reason);
@@ -583,7 +589,18 @@ function cloneToolStats(snapshot: RuntimeToolStatsSnapshot): RuntimeToolStatsSna
 }
 
 function cloneHookStats(snapshot: RuntimeHookStatsSnapshot): RuntimeHookStatsSnapshot {
-  return { ...snapshot, last: snapshot.last ? { ...snapshot.last } : undefined };
+  return {
+    ...snapshot,
+    last: snapshot.last ? {
+      ...snapshot.last,
+      kinds: snapshot.last.kinds ? [...snapshot.last.kinds] : undefined,
+      characterOverlays: snapshot.last.characterOverlays ? [...snapshot.last.characterOverlays] : undefined,
+    } : undefined,
+  };
+}
+
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values));
 }
 function emptyToolResultPairingStats(): RuntimeToolResultPairingSnapshot {
   return {

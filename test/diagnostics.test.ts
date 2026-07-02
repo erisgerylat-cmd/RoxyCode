@@ -129,6 +129,60 @@ test('diagnostics surfaces tool result pairing repair statistics', async () => {
   assert.match(output, /duplicate=2/);
   assert.ok(output.includes('/rewind'));
 });
+test('diagnostics shows character behavior profile and recent character hook overlay', async () => {
+  const runtime = baseRuntime();
+  runtime.operations.hooks = {
+    ...runtime.operations.hooks,
+    totalRuns: 1,
+    last: {
+      event: 'before_prompt',
+      matched: 1,
+      durationMs: 1,
+      blocked: false,
+      errors: 0,
+      at: Date.now(),
+      kinds: ['character'],
+      characterOverlays: ['roxy-style'],
+    },
+  };
+
+  const output = await captureConsole(async () => {
+    await renderDiagnosticsCommand({
+      language: 'zh-CN',
+      configManager: fakeConfigManager(DEFAULT_CONFIG),
+      contextManager: fakeContextManager(),
+      llmProvider: fakeProvider(),
+      characterManager: fakeCharacterManager({
+        name: 'Roxy',
+        behavior: {
+          explanationStyle: 'teaching',
+          reviewFocus: ['security', 'testing'],
+          riskPreference: 'conservative',
+          preferredMode: 'standard',
+          workflowBias: [],
+          responseRules: [],
+        },
+      }),
+      getCommandCount: () => 12,
+      getRuntimeSnapshot: () => runtime,
+      getMemoryStats: async () => ({
+        enabled: true,
+        total: 0,
+        manual: 0,
+        auto: 0,
+        global: 0,
+        project: 0,
+        archived: 0,
+        byType: { user: 0, project: 0, feedback: 0, reference: 0, learning: 0, workflow: 0 },
+      }),
+    });
+  });
+
+  assert.match(output, /角色行为画像/);
+  assert.match(output, /style=teaching/);
+  assert.match(output, /focus=security,testing/);
+  assert.match(output, /roxy-style/);
+});
 test('diagnostics keeps generic advice for non-provider runtime errors', async () => {
   const output = await captureConsole(async () => {
     await renderDiagnosticsCommand({
@@ -318,9 +372,9 @@ function fakeProvider(): LLMProvider {
   };
 }
 
-function fakeCharacterManager(): CharacterManager {
+function fakeCharacterManager(character: Record<string, unknown> = { name: 'Roxy' }): CharacterManager {
   return {
-    getCurrentCharacter: () => ({ name: 'Roxy' }),
+    getCurrentCharacter: () => character,
   } as unknown as CharacterManager;
 }
 

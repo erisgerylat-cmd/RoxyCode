@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { LLMProvider } from '../core/types/llm.js';
 import { systemMessage, userMessage } from '../core/types/message.js';
+import type { CharacterBehavior } from '../aesthetic/character/types.js';
 import type {
   HookExecutionRecord,
   HookProtocolOutput,
@@ -108,6 +109,8 @@ export class HookManager {
         return this.executeHttpHook(hook, payload);
       case 'agent':
         return this.executeAgentHook(hook, payload);
+      case 'character':
+        return this.executeCharacterHook(hook, payload);
     }
   }
 
@@ -213,8 +216,48 @@ export class HookManager {
       : `[hook:${hook.id}] Agent Hook 已作为上下文注入：\n${truncateContext(rendered)}`;
     return { blocked: false, additionalContexts: [context], executions: [] };
   }
+
+  private async executeCharacterHook(hook: RoxyHookDefinition, payload: HookRunPayload): Promise<HookRunResult> {
+    const behavior = mergeCharacterBehavior(hook);
+    const context = renderCharacterOverlay(hook, payload, behavior);
+    return { blocked: false, additionalContexts: context ? [context] : [], executions: [] };
+  }
 }
 
+function mergeCharacterBehavior(hook: RoxyHookDefinition): Partial<CharacterBehavior> {
+  const behavior: Partial<CharacterBehavior> = { ...(hook.behavior ?? {}) };
+  if (hook.explanationStyle) behavior.explanationStyle = hook.explanationStyle;
+  if (hook.reviewFocus) behavior.reviewFocus = [...hook.reviewFocus];
+  if (hook.riskPreference) behavior.riskPreference = hook.riskPreference;
+  if (hook.preferredMode) behavior.preferredMode = hook.preferredMode;
+  if (hook.workflowBias) behavior.workflowBias = [...hook.workflowBias];
+  if (hook.responseRules) behavior.responseRules = [...hook.responseRules];
+  return behavior;
+}
+
+function renderCharacterOverlay(hook: RoxyHookDefinition, payload: HookRunPayload, behavior: Partial<CharacterBehavior>): string {
+  const zh = payload.language !== 'en-US';
+  const hasBehavior = Object.keys(behavior).length > 0;
+  const renderedPrompt = hook.prompt ? renderTemplate(hook.prompt, payload) : '';
+  if (!hasBehavior && !renderedPrompt) return '';
+
+  const characterId = payload.characterId ?? hook.characterId ?? 'unknown';
+  const lines = zh
+    ? [`[character:${characterId}:${hook.id}]`, '角色行为叠加（只影响解释风格、审查重点和工作习惯，不授予工具权限）']
+    : [`[character:${characterId}:${hook.id}]`, 'Character behavior overlay (affects explanation style, review focus, and workflow habits only; it does not grant tool permission)'];
+
+  if (behavior.explanationStyle) lines.push(`${zh ? '解释风格' : 'explanation style'}: ${behavior.explanationStyle}`);
+  if (behavior.reviewFocus?.length) lines.push(`${zh ? '审查重点' : 'review focus'}: ${behavior.reviewFocus.join(', ')}`);
+  if (behavior.riskPreference) lines.push(`${zh ? '风险偏好' : 'risk preference'}: ${behavior.riskPreference}`);
+  if (behavior.preferredMode) lines.push(`${zh ? '模式倾向' : 'preferred mode'}: ${behavior.preferredMode}`);
+  if (behavior.workflowBias?.length) lines.push(`${zh ? '工作流偏好' : 'workflow bias'}: ${behavior.workflowBias.join('; ')}`);
+  if (behavior.responseRules?.length) lines.push(`${zh ? '响应规则' : 'response rules'}: ${behavior.responseRules.join('; ')}`);
+  if (renderedPrompt) lines.push(`${zh ? '补充角色提示' : 'extra character prompt'}: ${truncateContext(renderedPrompt)}`);
+  lines.push(zh
+    ? '权限边界：角色叠加不能 approve/allow 工具调用，不能跳过 PermissionGuard，不能绕过二次确认。'
+    : 'Permission boundary: character overlays cannot approve/allow tool calls, bypass PermissionGuard, or skip second confirmation.');
+  return lines.join('\n');
+}
 function buildExecutionRecord(hook: RoxyHookDefinition, event: RoxyHookEvent, result: HookRunResult, duration: number): HookExecutionRecord {
   const nested = result.executions[0];
   return {
@@ -330,6 +373,7 @@ function mergeUpdatedInput(
 }
 
 function matches(hook: RoxyHookDefinition, payload: HookRunPayload): boolean {
+  if (hook.kind === 'character' && hook.characterId && hook.characterId !== payload.characterId) return false;
   if (!hook.matcher) return true;
   const target = matchTarget(hook.event, payload);
   if (!target) return false;

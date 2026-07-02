@@ -1,3 +1,5 @@
+import type { CharacterBehavior, CharacterId, ExplanationStyle, PreferredAgentMode, ReviewFocus, RiskPreference } from '../aesthetic/character/types.js';
+
 export type RoxyHookEvent =
   | 'session_start'
   | 'before_prompt'
@@ -8,7 +10,7 @@ export type RoxyHookEvent =
   | 'agent_start'
   | 'agent_done';
 
-export type RoxyHookKind = 'command' | 'prompt' | 'http' | 'agent';
+export type RoxyHookKind = 'command' | 'prompt' | 'http' | 'agent' | 'character';
 export type RoxyHookOutcome = 'success' | 'blocked' | 'error' | 'skipped';
 
 export interface RoxyHookDefinition {
@@ -29,6 +31,14 @@ export interface RoxyHookDefinition {
   allowedEnvVars?: string[];
   allowInsecureHttp?: boolean;
   statusMessage?: string;
+  characterId?: CharacterId;
+  behavior?: Partial<CharacterBehavior>;
+  explanationStyle?: ExplanationStyle;
+  reviewFocus?: ReviewFocus[];
+  riskPreference?: RiskPreference;
+  preferredMode?: PreferredAgentMode;
+  workflowBias?: string[];
+  responseRules?: string[];
   source?: string;
   pluginId?: string;
 }

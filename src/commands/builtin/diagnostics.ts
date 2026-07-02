@@ -870,7 +870,10 @@ function diagnoseTelemetry(runtime: RuntimeStateSnapshot | undefined, isZh: bool
 function diagnosePersonalization(options: DiagnosticsCommandOptions, characterName: string): DiagnosticCheck[] {
   const isZh = options.language === 'zh-CN';
   const config = options.configManager.snapshot();
-  return [
+  const character = options.characterManager.getCurrentCharacter();
+  const behavior = character.behavior;
+  const lastHook = options.getRuntimeSnapshot?.().operations.hooks.last;
+  const checks: DiagnosticCheck[] = [
     {
       severity: 'pass',
       title: isZh ? '角色系统已加载' : 'Character system loaded',
@@ -889,8 +892,30 @@ function diagnosePersonalization(options: DiagnosticsCommandOptions, characterNa
       detail: String(config.ui.aestheticMode),
     },
   ];
-}
 
+  checks.push(behavior
+    ? {
+        severity: 'pass',
+        title: isZh ? '角色行为画像' : 'Character behavior profile',
+        detail: `style=${behavior.explanationStyle}, focus=${behavior.reviewFocus.join(',')}, risk=${behavior.riskPreference}, mode=${behavior.preferredMode}`,
+      }
+    : {
+        severity: 'info',
+        title: isZh ? '角色行为画像' : 'Character behavior profile',
+        detail: isZh ? '当前角色未声明 behavior，只有外观和基础 persona 生效。' : 'Current character has no behavior profile; only appearance and base persona are active.',
+        action: isZh ? '可通过 /character create 或 character hook 补充解释风格、审查重点和风险偏好。' : 'Use /character create or a character hook to add explanation style, review focus, and risk preference.',
+      });
+
+  if (lastHook?.characterOverlays?.length) {
+    checks.push({
+      severity: 'pass',
+      title: isZh ? '角色 Hook 叠加最近已生效' : 'Recent character hook overlay',
+      detail: `${lastHook.characterOverlays.join(', ')} / kinds=${lastHook.kinds?.join(',') ?? 'character'}`,
+    });
+  }
+
+  return checks;
+}
 function countBySeverity(checks: DiagnosticCheck[]): Record<Severity, number> {
   return checks.reduce<Record<Severity, number>>((acc, check) => {
     acc[check.severity] += 1;

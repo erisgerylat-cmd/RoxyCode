@@ -3,10 +3,15 @@ import { readdir, readFile } from 'node:fs/promises';
 import { basename, extname, isAbsolute, resolve } from 'node:path';
 import type { RoxyCodeConfig } from '../core/types/config.js';
 import { parseWorkflowYaml } from '../workflow/yaml.js';
+import type { CharacterBehavior, ExplanationStyle, PreferredAgentMode, ReviewFocus, RiskPreference } from '../aesthetic/character/types.js';
 import type { HookLoadResult, RoxyHookDefinition, RoxyHookEvent, RoxyHookKind } from './types.js';
 
 const HOOK_EVENTS: RoxyHookEvent[] = ['session_start', 'before_prompt', 'after_response', 'before_tool', 'after_tool', 'command', 'agent_start', 'agent_done'];
-const HOOK_KINDS: RoxyHookKind[] = ['command', 'prompt', 'http', 'agent'];
+const HOOK_KINDS: RoxyHookKind[] = ['command', 'prompt', 'http', 'agent', 'character'];
+const EXPLANATION_STYLES: ExplanationStyle[] = ['concise', 'structured', 'teaching', 'deep', 'playful'];
+const REVIEW_FOCUS: ReviewFocus[] = ['correctness', 'security', 'performance', 'maintainability', 'testing', 'ux', 'learning'];
+const RISK_PREFERENCES: RiskPreference[] = ['conservative', 'balanced', 'bold'];
+const PREFERRED_MODES: PreferredAgentMode[] = ['lite', 'economic', 'standard', 'ultimate'];
 
 export interface HookLoaderOptions {
   cwd?: string;
@@ -97,8 +102,34 @@ function normalizeHook(raw: unknown, path: string, index: number): RoxyHookDefin
     allowedEnvVars: asStringArray(raw.allowedEnvVars ?? raw.allowed_env_vars),
     allowInsecureHttp: asBoolean(raw.allowInsecureHttp ?? raw.allow_insecure_http),
     statusMessage: asString(raw.statusMessage ?? raw.status_message),
+    characterId: asString(raw.characterId ?? raw.character_id ?? raw.character),
+    behavior: normalizeCharacterBehavior(raw.behavior ?? raw.characterBehavior ?? raw.character_behavior ?? raw.overlay),
+    explanationStyle: asEnum(raw.explanationStyle ?? raw.explanation_style, EXPLANATION_STYLES),
+    reviewFocus: asEnumArray(raw.reviewFocus ?? raw.review_focus, REVIEW_FOCUS),
+    riskPreference: asEnum(raw.riskPreference ?? raw.risk_preference, RISK_PREFERENCES),
+    preferredMode: asEnum(raw.preferredMode ?? raw.preferred_mode, PREFERRED_MODES),
+    workflowBias: asStringArray(raw.workflowBias ?? raw.workflow_bias),
+    responseRules: asStringArray(raw.responseRules ?? raw.response_rules),
     source: path,
   };
+}
+
+function normalizeCharacterBehavior(value: unknown): Partial<CharacterBehavior> | undefined {
+  if (!isRecord(value)) return undefined;
+  const behavior: Partial<CharacterBehavior> = {};
+  const explanationStyle = asEnum(value.explanationStyle ?? value.explanation_style, EXPLANATION_STYLES);
+  const reviewFocus = asEnumArray(value.reviewFocus ?? value.review_focus, REVIEW_FOCUS);
+  const riskPreference = asEnum(value.riskPreference ?? value.risk_preference, RISK_PREFERENCES);
+  const preferredMode = asEnum(value.preferredMode ?? value.preferred_mode, PREFERRED_MODES);
+  const workflowBias = asStringArray(value.workflowBias ?? value.workflow_bias);
+  const responseRules = asStringArray(value.responseRules ?? value.response_rules);
+  if (explanationStyle) behavior.explanationStyle = explanationStyle;
+  if (reviewFocus) behavior.reviewFocus = reviewFocus;
+  if (riskPreference) behavior.riskPreference = riskPreference;
+  if (preferredMode) behavior.preferredMode = preferredMode;
+  if (workflowBias) behavior.workflowBias = workflowBias;
+  if (responseRules) behavior.responseRules = responseRules;
+  return Object.keys(behavior).length > 0 ? behavior : undefined;
 }
 
 function dedupeHooks(hooks: RoxyHookDefinition[]): RoxyHookDefinition[] {
@@ -113,8 +144,15 @@ function dedupeHooks(hooks: RoxyHookDefinition[]): RoxyHookDefinition[] {
   return result;
 }
 
-function asEnum<T extends string>(value: unknown, candidates: readonly T[]): T | null {
-  return typeof value === 'string' && (candidates as readonly string[]).includes(value) ? value as T : null;
+function asEnum<T extends string>(value: unknown, candidates: readonly T[]): T | undefined {
+  return typeof value === 'string' && (candidates as readonly string[]).includes(value) ? value as T : undefined;
+}
+
+function asEnumArray<T extends string>(value: unknown, candidates: readonly T[]): T[] | undefined {
+  const raw = asStringArray(value);
+  if (!raw) return undefined;
+  const result = raw.filter((item): item is T => (candidates as readonly string[]).includes(item));
+  return result.length > 0 ? result : undefined;
 }
 
 function asString(value: unknown): string | undefined {
