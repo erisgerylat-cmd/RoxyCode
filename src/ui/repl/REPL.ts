@@ -29,7 +29,9 @@ import { SessionStore } from '../../session/store/SessionStore.js';
 import { AutoMemoryExtractor, MemoryPolicyError, MemoryStore } from '../../session/memory/index.js';
 import { HookLoader, HookManager } from '../../hooks/index.js';
 import { McpConfigLoader, McpToolAdapter } from '../../mcp/index.js';
-import { PluginLoader, collectPluginContributions, createPluginCommands } from '../../plugin/index.js';
+import { PluginLoader, collectPluginContributions } from '../../plugin/index.js';
+import { CommandLoader } from '../../commands/CommandLoader.js';
+import { PluginCommandSource, SkillCommandSource, WorkflowCommandSource } from '../../commands/sources/index.js';
 import type { CommandDefinition } from '../../commands/CommandRegistry.js';
 import { createRuntimeState, type QueryProfileSummary, type RuntimeExtensionSnapshot, type RuntimeState } from '../../runtime/index.js';
 import { formatErrorForDisplay, getRoxyErrorDescriptor, toError } from '../../core/errors.js';
@@ -232,10 +234,13 @@ export class REPL {
     const pluginResult = await new PluginLoader({ cwd: process.cwd(), config }).load();
     const contributions = collectPluginContributions(pluginResult.enabled);
 
-    this.extensionCommands = createPluginCommands({
-      commands: contributions.commands,
-      runAgentPrompt: prompt => this.submitAgentPrompt(prompt),
-    });
+    const dynamicCommands = await new CommandLoader([
+      new WorkflowCommandSource({ cwd: process.cwd(), configManager: this.configManager, characterManager: this.characterManager, sessionId: this.sessionStore.sessionId }),
+      new PluginCommandSource({ cwd: process.cwd(), config, loadResult: pluginResult }),
+      new SkillCommandSource({ cwd: process.cwd() }),
+    ]).load({ runAgentPrompt: prompt => this.submitAgentPrompt(prompt) });
+
+    this.extensionCommands = dynamicCommands.commands;
     this.reloadCommands();
 
     const hookResult = await new HookLoader({
@@ -270,7 +275,7 @@ export class REPL {
         ],
       },
       commands: {
-        builtin: registeredCommands.filter(command => command.source !== 'plugin').length,
+        builtin: registeredCommands.filter(command => (command.source ?? 'builtin') === 'builtin').length,
         extension: this.extensionCommands.length,
         total: registeredCommands.length,
       },
