@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { basename } from 'node:path';
 import type { Character } from '../../aesthetic/character/types.js';
 import type { ToolCall, ToolResult } from '../../core/types/message.js';
-import type { Tool } from '../../tool/index.js';
+import { describeToolProgress, type Tool, type ToolProgressEvent } from '../../tool/index.js';
 
 interface ToolActivityRecord {
   id: string;
@@ -17,6 +17,8 @@ interface ToolActivityRecord {
   error?: string;
   resultSummary?: string;
   permissionWaitingAt?: number;
+  progress: ToolProgressEvent[];
+  latestProgress?: string;
   concurrency?: Tool['concurrency'];
   interruptBehavior?: Tool['interruptBehavior'];
 }
@@ -90,6 +92,14 @@ export class ToolActivityRenderer {
   }
 
 
+  markToolProgress(toolCall: ToolCall, progress: ToolProgressEvent): string {
+    const record = this.ensureRecord(toolCall);
+    const label = describeToolProgress(progress, this.language);
+    record.progress.push(progress);
+    record.latestProgress = label;
+    return label;
+  }
+
   markPermissionWaiting(prompt: { title: string; riskLevel: string; requiresSecondConfirmation?: boolean }, second = false): void {
     const record = this.getLastOpenRecord();
     if (record) record.permissionWaitingAt = Date.now();
@@ -148,6 +158,7 @@ export class ToolActivityRenderer {
         args: toolCall.arguments,
         argsBuffer: '',
         requestedAt: Date.now(),
+        progress: [],
       };
       this.records.set(toolCall.id, record);
       this.order.push(toolCall.id);

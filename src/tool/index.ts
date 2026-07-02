@@ -6,6 +6,8 @@ export type {
   ToolExecutionContext,
   ToolInvocation,
   ToolInterruptBehavior,
+  ToolProgressEvent,
+  ToolProgressSink,
   ToolParameterProperty,
   ToolParameterSchema,
   PermissionClassification,
@@ -32,6 +34,7 @@ export { AuditLog } from './audit/AuditLog.js';
 export { buildTool, withToolDefaults, DEFAULT_MAX_RESULT_SIZE_CHARS } from './builder/ToolBuilder.js';
 export { getBuiltinTools } from './builtin/index.js';
 export { processToolResultSize } from './storage/ToolResultStorage.js';
+export { describeToolProgress, emitToolProgress } from './progress/ToolProgress.js';
 export type { PersistedToolResult } from './storage/ToolResultStorage.js';
 export {
   readFileTool,

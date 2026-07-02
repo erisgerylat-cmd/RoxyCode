@@ -1,14 +1,19 @@
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { DEFAULT_CONFIG } from '../src/core/types/config.js';
 import type { RoxyCodeConfig } from '../src/core/types/config.js';
-import type { Tool, ToolExecutionContext, ToolResult } from '../src/tool/types.js';
+import type { Tool, ToolExecutionContext, ToolProgressEvent, ToolResult } from '../src/tool/types.js';
 import { PermissionClassifier } from '../src/tool/permission/PermissionClassifier.js';
 import { classifyShellCommand } from '../src/tool/security/ShellSafety.js';
 import { classifyShellRuntime } from '../src/tool/utils/shellRisk.js';
 import { executeCommandTool } from '../src/tool/builtin/executeCommand.js';
 import { gitTool } from '../src/tool/builtin/git.js';
+import { grepSearchTool } from '../src/tool/builtin/grepSearch.js';
+import { readFileTool } from '../src/tool/builtin/readFile.js';
 import { McpToolAdapter } from '../src/mcp/McpToolAdapter.js';
 import type { McpServerDefinition, McpToolDefinition } from '../src/mcp/types.js';
 import { StreamingToolExecutor } from '../src/engine/agent/StreamingToolExecutor.js';
@@ -29,13 +34,14 @@ function createConfig(overrides: Partial<RoxyCodeConfig> = {}): RoxyCodeConfig {
   };
 }
 
-function createContext(config = createConfig()): ToolExecutionContext {
+function createContext(config = createConfig(), overrides: Partial<ToolExecutionContext> = {}): ToolExecutionContext {
   return {
     cwd: process.cwd(),
     sessionId: 'test-session',
     config,
     language: 'zh-CN',
     permissionMode: 'strict',
+    ...overrides,
   };
 }
 
@@ -127,6 +133,94 @@ test('mcp annotations map read-only and destructive tools to scheduling metadata
   assert.equal(destructiveTool.concurrency, 'exclusive');
   assert.equal(destructiveTool.interruptBehavior, 'block');
   assert.equal(destructiveTool.isConcurrencySafe?.({}, createContext()), false);
+  assert.equal(readOnlyTool.isDestructive?.({}, createContext()), false);
+  assert.equal(destructiveTool.isDestructive?.({}, createContext()), true);
+});
+
+
+test('read_file emits structured file progress events', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-tool-progress-read-'));
+  try {
+    const target = join(cwd, 'sample.txt');
+    await writeFile(target, ['alpha', 'beta', 'gamma'].join('\n'), 'utf8');
+    const progress: ToolProgressEvent[] = [];
+
+    const result = await readFileTool.execute({ path: 'sample.txt', offset: 2, limit: 1 }, createContext(createConfig(), {
+      cwd,
+      onProgress: event => progress.push(event),
+    }));
+
+    assert.equal(result.success, true);
+    assert.deepEqual(progress.map(event => event.type), ['file_read', 'file_read']);
+    const complete = progress.at(-1);
+    assert.equal(complete?.type, 'file_read');
+    if (complete?.type === 'file_read') {
+      assert.equal(complete.stage, 'complete');
+      assert.equal(complete.totalLines, 3);
+      assert.equal(complete.selectedLines, 1);
+      assert.equal(complete.partial, true);
+    }
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('grep_search emits structured search progress events', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-tool-progress-grep-'));
+  try {
+    await mkdir(join(cwd, 'src'), { recursive: true });
+    await writeFile(join(cwd, 'src', 'a.txt'), ['Roxy one', 'nothing', 'Roxy two'].join('\n'), 'utf8');
+    const progress: ToolProgressEvent[] = [];
+
+    const result = await grepSearchTool.execute({ pattern: 'Roxy', path: 'src', max_results: 5 }, createContext(createConfig(), {
+      cwd,
+      onProgress: event => progress.push(event),
+    }));
+
+    assert.equal(result.success, true);
+    assert.equal(progress[0]?.type, 'search_start');
+    assert.equal(progress.filter(event => event.type === 'search_match').length, 2);
+    assert.equal(progress.at(-1)?.type, 'search_complete');
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('execute_command emits command start, output, and completion progress', async () => {
+  const progress: ToolProgressEvent[] = [];
+  const command = process.platform === 'win32'
+    ? `& "${process.execPath}" -e "console.log('roxy-progress')"`
+    : `"${process.execPath}" -e "console.log('roxy-progress')"`;
+
+  const result = await executeCommandTool.execute({ command, timeout_ms: 10_000 }, createContext(createConfig(), {
+    onProgress: event => progress.push(event),
+  }));
+
+  assert.equal(result.success, true);
+  assert.equal(progress[0]?.type, 'command_start');
+  assert.ok(progress.some(event => event.type === 'output_chunk' && event.stream === 'stdout' && event.text.includes('roxy-progress')));
+  assert.equal(progress.at(-1)?.type, 'command_complete');
+});
+
+test('streaming executor forwards tool progress events before tool_result', async () => {
+  const executor = new StreamingToolExecutor({
+    tools: [createScheduledTool('progress_tool', true)],
+    context: createContext(),
+    toolExecutor: {
+      async execute(invocation, ctx) {
+        ctx.onProgress?.({ type: 'status', toolName: invocation.name, phase: 'execute', message: 'halfway' });
+        return { success: true, output: 'done', duration: 1, metadata: { tool: invocation.name } };
+      },
+    },
+  });
+
+  executor.addTool({ id: 'progress-1', name: 'progress_tool', arguments: {} });
+  const events = [];
+  for await (const event of executor.run()) events.push(event);
+
+  assert.deepEqual(events.map(event => event.type), ['tool_execution_start', 'tool_progress', 'tool_result']);
+  assert.equal(events[1].type, 'tool_progress');
+  if (events[1].type === 'tool_progress') assert.equal(events[1].progress.type, 'status');
 });
 
 test('streaming executor overlaps safe tools but preserves tool_result order', async () => {

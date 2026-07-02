@@ -7,6 +7,17 @@ import type { FileReadState } from './security/FileReadState.js';
 export type ToolRiskLevel = 'low' | 'medium' | 'high';
 export type ToolConcurrency = 'safe' | 'exclusive';
 export type ToolInterruptBehavior = 'cancel' | 'block';
+export type ToolProgressEvent =
+  | { type: 'status'; toolName?: string; phase?: 'preflight' | 'permission' | 'execute' | 'complete'; message: string }
+  | { type: 'file_read'; stage: 'start' | 'complete'; path: string; bytes?: number; totalLines?: number; offset?: number; limit?: number; selectedLines?: number; partial?: boolean }
+  | { type: 'search_start'; pattern: string; path: string; maxResults: number }
+  | { type: 'search_match'; path: string; line: number; text: string; matchCount: number }
+  | { type: 'search_complete'; pattern: string; path: string; matches: number; truncated: boolean }
+  | { type: 'command_start'; command: string; timeoutMs: number; shellLevel?: 'allow' | 'ask' | 'dangerous' }
+  | { type: 'output_chunk'; command: string; stream: 'stdout' | 'stderr'; text: string }
+  | { type: 'command_complete'; command: string; exitCode: number | null; timedOut: boolean; stdoutChars: number; stderrChars: number }
+  | { type: 'mcp_call'; server: string; tool: string; phase: 'start' | 'complete'; readOnly: boolean; destructive: boolean; openWorld: boolean; success?: boolean };
+export type ToolProgressSink = (event: ToolProgressEvent) => void;
 export type ToolPermissionMode = 'strict' | 'auto-approve' | 'read-only';
 export type ToolPermissionBehavior = 'allow' | 'deny' | 'ask';
 export type ToolPermissionDecisionReason =
@@ -92,6 +103,7 @@ export interface ToolExecutionContext {
   env?: Record<string, string>;
   confirm?: (prompt: ToolPermissionPrompt) => Promise<boolean>;
   confirmSecond?: (prompt: ToolPermissionPrompt) => Promise<boolean>;
+  onProgress?: ToolProgressSink;
   characterId?: RoxyCodeConfig['character']['current'];
   hooks?: HookRunner;
   telemetry?: TelemetryLogger;
@@ -112,6 +124,7 @@ export interface Tool {
   backfillObservableInput?(input: Record<string, unknown>): void;
   preparePermissionMatcher?(args: Record<string, unknown>, ctx: ToolExecutionContext): Promise<(pattern: string) => boolean>;
   isConcurrencySafe?(args: Record<string, unknown>, ctx: ToolExecutionContext): boolean;
+  isDestructive?(args: Record<string, unknown>, ctx: ToolExecutionContext): boolean;
   execute(args: Record<string, unknown>, ctx: ToolExecutionContext): Promise<ToolResult>;
   preflight?(args: Record<string, unknown>, ctx: ToolExecutionContext): Promise<string | null>;
   getAffectedPaths?(args: Record<string, unknown>, ctx: ToolExecutionContext): string[];

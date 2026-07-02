@@ -396,6 +396,11 @@ export class AgentLoop {
           continue;
         }
 
+        if (event.type === 'tool_progress') {
+          yield event;
+          continue;
+        }
+
         profiler.mark('query_tool_execution_end', event.toolCall.name);
         yield event;
         messages = [...messages, toolResultMessage(event.toolCall, event.result)];

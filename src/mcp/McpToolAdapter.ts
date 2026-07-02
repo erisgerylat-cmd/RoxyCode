@@ -1,5 +1,6 @@
 import type { Tool, ToolDefinition, ToolParameterProperty, ToolParameterSchema } from '../tool/types.js';
 import { formatToolResult } from '../tool/executor/ToolExecutor.js';
+import { emitToolProgress } from '../tool/progress/ToolProgress.js';
 import type { McpServerDefinition, McpToolAnnotations, McpToolDefinition } from './types.js';
 import { McpStdioClient } from './McpStdioClient.js';
 
@@ -58,6 +59,9 @@ export class McpToolAdapter {
       isConcurrencySafe() {
         return readOnly;
       },
+      isDestructive() {
+        return destructive;
+      },
       getPermissionPrompt(args, ctx) {
         const zh = ctx.language !== 'en-US';
         return {
@@ -75,8 +79,10 @@ export class McpToolAdapter {
       },
       async execute(args, ctx) {
         const started = Date.now();
+        emitToolProgress(ctx, { type: 'mcp_call', server: server.name, tool: mcpTool.originalName, phase: 'start', readOnly, destructive, openWorld });
         const rawResult = await getClient().callTool(mcpTool.originalName, args);
         const success = !isMcpErrorResult(rawResult);
+        emitToolProgress(ctx, { type: 'mcp_call', server: server.name, tool: mcpTool.originalName, phase: 'complete', readOnly, destructive, openWorld, success });
         const body = renderMcpResult(server.name, mcpTool.originalName, rawResult, ctx.language !== 'en-US');
         return {
           success,

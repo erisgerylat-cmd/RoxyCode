@@ -4,7 +4,7 @@ import type { LLMProvider, LLMToolResultPairingRepair, LLMUsage } from '../../co
 import type { Message, ToolCall, ToolResult } from '../../core/types/message.js';
 import type { ContextManager } from '../../session/context/ContextManager.js';
 import type { HookRunner } from '../../hooks/types.js';
-import type { Tool, ToolDefinition, ToolExecutor, ToolPermissionPrompt } from '../../tool/index.js';
+import type { Tool, ToolDefinition, ToolExecutor, ToolPermissionPrompt, ToolProgressEvent } from '../../tool/index.js';
 import type { TelemetryLogger } from '../../telemetry/index.js';
 import type { MultiAgentEvent } from '../multi-agent/index.js';
 import type { QueryProfileSummary } from '../../runtime/index.js';
@@ -22,6 +22,7 @@ export type AgentLoopEvent =
   | { type: 'tool_call_start'; toolCall: ToolCall }
   | { type: 'tool_call_delta'; id: string; argsDelta: string }
   | { type: 'tool_execution_start'; toolCall: ToolCall }
+  | { type: 'tool_progress'; toolCall: ToolCall; progress: ToolProgressEvent }
   | { type: 'tool_result'; toolCall: ToolCall; result: ToolResult }
   | { type: 'verification'; text: string }
   | { type: 'context_compacted'; layer: string; beforeTokens: number; afterTokens: number }

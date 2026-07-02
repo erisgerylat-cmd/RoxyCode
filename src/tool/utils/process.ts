@@ -11,7 +11,12 @@ export interface CommandOutput {
   aborted?: boolean;
 }
 
-export function runCommand(command: string, args: string[], ctx: ToolExecutionContext, options: { timeoutMs?: number } = {}): Promise<CommandOutput> {
+export interface RunCommandOptions {
+  timeoutMs?: number;
+  onOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void;
+}
+
+export function runCommand(command: string, args: string[], ctx: ToolExecutionContext, options: RunCommandOptions = {}): Promise<CommandOutput> {
   return new Promise((resolve, reject) => {
     try {
       throwIfAborted(ctx);
@@ -52,8 +57,16 @@ export function runCommand(command: string, args: string[], ctx: ToolExecutionCo
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', chunk => { stdout += chunk; });
-    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.stdout.on('data', chunk => {
+      const text = String(chunk);
+      stdout += text;
+      options.onOutput?.('stdout', text);
+    });
+    child.stderr.on('data', chunk => {
+      const text = String(chunk);
+      stderr += text;
+      options.onOutput?.('stderr', text);
+    });
     child.on('error', error => {
       cleanup();
       reject(error);

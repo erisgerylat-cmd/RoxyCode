@@ -597,6 +597,12 @@ export class REPL {
         attributes.toolName = event.toolCall.name;
         attributes.argumentKeys = Object.keys(event.toolCall.arguments);
         break;
+      case 'tool_progress':
+        name = 'tool.progress';
+        category = 'tool';
+        attributes.toolName = event.toolCall.name;
+        attributes.progressType = event.progress.type;
+        break;
       case 'tool_result':
         name = 'tool.result_seen';
         category = 'tool';
@@ -729,6 +735,11 @@ export class REPL {
         this.startStatusBar('tool');
         this.statusBar.onToolStart(event.toolCall.name, event.toolCall.arguments);
         break;
+      case 'tool_progress': {
+        const label = this.toolActivityRenderer.markToolProgress(event.toolCall, event.progress);
+        this.updateStatusBar('tool', label);
+        break;
+      }
       case 'tool_result':
         this.clearStatusBar();
         this.toolActivityRenderer.markToolResult(event.toolCall, event.result);
@@ -820,6 +831,9 @@ export class REPL {
         break;
       case 'tool_execution_start':
         await this.sessionStore.append({ type: 'note', note: 'tool execution start', metadata: { tool: event.toolCall.name, args: sanitizeSessionMetadata(event.toolCall.arguments) } });
+        break;
+      case 'tool_progress':
+        await this.sessionStore.append({ type: 'note', note: 'tool progress', metadata: { tool: event.toolCall.name, progress: sanitizeSessionMetadata(event.progress as unknown as Record<string, unknown>) } });
         break;
       case 'tool_result':
         await this.sessionStore.append({

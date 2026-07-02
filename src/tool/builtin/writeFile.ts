@@ -24,6 +24,9 @@ export const writeFileTool: Tool = {
   riskLevel: 'high',
   concurrency: 'exclusive',
   interruptBehavior: 'block',
+  isDestructive() {
+    return true;
+  },
   getAffectedPaths(args, ctx) {
     return [resolveToolPath(ctx, stringArg(args, 'path'))];
   },

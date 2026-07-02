@@ -1,6 +1,7 @@
 ﻿import { readFile, stat } from 'node:fs/promises';
 import type { Tool } from '../types.js';
 import { formatToolResult } from '../executor/ToolExecutor.js';
+import { emitToolProgress } from '../progress/ToolProgress.js';
 import { okBody, optionalNumberArg, resolveToolPath, stringArg } from '../utils/args.js';
 import { throwIfAborted } from '../utils/abort.js';
 import { ensureFileReadState } from '../security/FileReadState.js';
@@ -23,6 +24,9 @@ export const readFileTool: Tool = {
   riskLevel: 'low',
   concurrency: 'safe',
   interruptBehavior: 'cancel',
+  isDestructive() {
+    return false;
+  },
   getAffectedPaths(args, ctx) {
     return [resolveToolPath(ctx, stringArg(args, 'path'))];
   },
@@ -32,12 +36,24 @@ export const readFileTool: Tool = {
     const offset = Math.max(1, optionalNumberArg(args, 'offset') ?? 1);
     const limit = Math.max(1, optionalNumberArg(args, 'limit') ?? 200);
     throwIfAborted(ctx);
+    const fileStat = await stat(path);
+    emitToolProgress(ctx, { type: 'file_read', stage: 'start', path, bytes: fileStat.size, offset, limit });
     const content = await readFile(path, 'utf-8');
     throwIfAborted(ctx);
     const lines = content.split(/\r?\n/);
     const selected = lines.slice(offset - 1, offset - 1 + limit);
-    const fileStat = await stat(path);
     const isPartialView = offset !== 1 || selected.length < lines.length;
+    emitToolProgress(ctx, {
+      type: 'file_read',
+      stage: 'complete',
+      path,
+      bytes: fileStat.size,
+      totalLines: lines.length,
+      offset,
+      limit,
+      selectedLines: selected.length,
+      partial: isPartialView,
+    });
     ensureFileReadState(ctx).record({
       path,
       content,

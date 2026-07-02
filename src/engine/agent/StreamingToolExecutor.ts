@@ -1,8 +1,9 @@
 import type { ToolCall, ToolResult } from '../../core/types/message.js';
-import type { Tool, ToolExecutionContext, ToolExecutor, ToolInvocation } from '../../tool/index.js';
+import type { Tool, ToolExecutionContext, ToolExecutor, ToolInvocation, ToolProgressEvent } from '../../tool/index.js';
 
 export type StreamingToolExecutorEvent =
   | { type: 'tool_execution_start'; toolCall: ToolCall }
+  | { type: 'tool_progress'; toolCall: ToolCall; progress: ToolProgressEvent }
   | { type: 'tool_result'; toolCall: ToolCall; result: ToolResult };
 
 export interface StreamingToolExecutorOptions {
@@ -26,12 +27,15 @@ type TrackedTool = {
 /**
  * RoxyCode's conservative streaming tool scheduler.
  * It allows safe read/deferred tools to overlap, keeps write/high-risk tools exclusive,
- * and always yields tool_result events in the original tool_call order.
+ * yields structured progress events, and always yields tool_result events in the
+ * original tool_call order.
  */
 export class StreamingToolExecutor {
   private readonly toolMetadata = new Map<string, Tool>();
   private readonly queue: TrackedTool[] = [];
   private readonly maxConcurrency: number;
+  private readonly pendingProgress: Array<{ toolCall: ToolCall; progress: ToolProgressEvent }> = [];
+  private readonly progressWaiters: Array<() => void> = [];
   private discarded = false;
 
   constructor(private readonly options: StreamingToolExecutorOptions) {
@@ -52,6 +56,7 @@ export class StreamingToolExecutor {
 
   discard(): void {
     this.discarded = true;
+    this.wakeProgressWaiters();
   }
 
   async *run(): AsyncGenerator<StreamingToolExecutorEvent> {
@@ -59,6 +64,7 @@ export class StreamingToolExecutor {
       const started = this.startRunnableTools();
       for (const tool of started) yield { type: 'tool_execution_start', toolCall: tool.toolCall };
 
+      yield* this.drainProgressEvents();
       for (const event of this.drainCompletedInOrder()) yield event;
       if (!this.hasPendingWork()) break;
 
@@ -68,6 +74,7 @@ export class StreamingToolExecutor {
         continue;
       }
       const waiters = executing.map(promise => promise.catch(() => undefined));
+      waiters.push(this.waitForProgress());
       if (!this.discarded && !this.options.context.signal?.aborted) waiters.push(this.waitForAbort());
       await Promise.race(waiters);
       if (this.discarded || this.options.context.signal?.aborted) {
@@ -75,6 +82,7 @@ export class StreamingToolExecutor {
       }
     }
 
+    yield* this.drainProgressEvents();
     for (const event of this.drainCompletedInOrder()) yield event;
   }
 
@@ -110,10 +118,12 @@ export class StreamingToolExecutor {
       if (tool.status === 'yielded' || tool.result?.metadata?.synthetic === true) return;
       tool.result = result;
       tool.status = 'completed';
+      this.wakeProgressWaiters();
     }).catch(error => {
       if (tool.status === 'yielded' || tool.result?.metadata?.synthetic === true) return;
       tool.result = syntheticToolResult(tool.toolCall.name, this.options.context, 'execution_error', error instanceof Error ? error.message : String(error));
       tool.status = 'completed';
+      this.wakeProgressWaiters();
     });
   }
 
@@ -128,7 +138,22 @@ export class StreamingToolExecutor {
     const context = tool.interruptBehavior === 'block'
       ? { ...this.options.context, signal: undefined }
       : this.options.context;
-    return this.options.toolExecutor.execute(invocation, context);
+    const previousProgress = context.onProgress;
+    const scopedContext: ToolExecutionContext = {
+      ...context,
+      onProgress: event => {
+        previousProgress?.(event);
+        this.enqueueProgress(tool.toolCall, event);
+      },
+    };
+    return this.options.toolExecutor.execute(invocation, scopedContext);
+  }
+
+  private *drainProgressEvents(): Generator<StreamingToolExecutorEvent> {
+    while (this.pendingProgress.length > 0) {
+      const event = this.pendingProgress.shift()!;
+      yield { type: 'tool_progress', toolCall: event.toolCall, progress: event.progress };
+    }
   }
 
   private *drainCompletedInOrder(): Generator<StreamingToolExecutorEvent> {
@@ -140,6 +165,21 @@ export class StreamingToolExecutor {
     }
   }
 
+  private enqueueProgress(toolCall: ToolCall, progress: ToolProgressEvent): void {
+    this.pendingProgress.push({ toolCall, progress });
+    this.wakeProgressWaiters();
+  }
+
+  private waitForProgress(): Promise<void> {
+    if (this.pendingProgress.length > 0) return Promise.resolve();
+    return new Promise(resolve => this.progressWaiters.push(resolve));
+  }
+
+  private wakeProgressWaiters(): void {
+    const waiters = this.progressWaiters.splice(0);
+    for (const wake of waiters) wake();
+  }
+
   private completeUnfinishedWithSyntheticResult(reason: SyntheticReason): void {
     for (const tool of this.queue) {
       if (tool.status !== 'queued' && tool.status !== 'executing') continue;
@@ -148,6 +188,7 @@ export class StreamingToolExecutor {
       tool.result = syntheticToolResult(tool.toolCall.name, this.options.context, reason);
       tool.status = 'completed';
     }
+    this.wakeProgressWaiters();
   }
 
   private waitForAbort(): Promise<void> {
@@ -181,7 +222,7 @@ function syntheticToolResult(toolName: string, ctx: ToolExecutionContext, reason
   const started = Date.now();
   const isZh = ctx.language !== 'en-US';
   const reasonText = syntheticReasonText(reason, isZh);
-  const detailText = detail ? `\n${isZh ? '细节' : 'Detail'}: ${detail}` : '';
+  const detailText = detail ? `\n${isZh ? '\u7ec6\u8282' : 'Detail'}: ${detail}` : '';
   const body = `<tool_result name="${toolName}" status="error">\n${reasonText}${detailText}\nmetadata: ${JSON.stringify({ tool: toolName, synthetic: true, reason })}\n</tool_result>`;
   return {
     success: false,
@@ -202,9 +243,9 @@ function syntheticReasonText(reason: SyntheticReason, isZh: boolean): string {
     }
   }
   switch (reason) {
-    case 'aborted': return '工具执行在运行前被中止。';
-    case 'discarded': return '由于流式执行尝试被重置，工具执行结果已丢弃。';
-    case 'execution_error': return '工具在流式执行调度器内部失败。';
-    case 'no_executor_progress': return '工具调度器无法继续推进执行。';
+    case 'aborted': return '\u5de5\u5177\u6267\u884c\u5728\u8fd0\u884c\u524d\u88ab\u4e2d\u6b62\u3002';
+    case 'discarded': return '\u7531\u4e8e\u6d41\u5f0f\u6267\u884c\u5c1d\u8bd5\u88ab\u91cd\u7f6e\uff0c\u5de5\u5177\u6267\u884c\u7ed3\u679c\u5df2\u4e22\u5f03\u3002';
+    case 'execution_error': return '\u5de5\u5177\u5728\u6d41\u5f0f\u6267\u884c\u8c03\u5ea6\u5668\u5185\u90e8\u5931\u8d25\u3002';
+    case 'no_executor_progress': return '\u5de5\u5177\u8c03\u5ea6\u5668\u65e0\u6cd5\u7ee7\u7eed\u63a8\u8fdb\u6267\u884c\u3002';
   }
 }
