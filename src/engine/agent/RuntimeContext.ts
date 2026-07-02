@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Language } from '../../i18n/index.js';
-import { MemoryStore, renderMemoriesForPrompt, selectRelevantMemories, type MemoryRecord } from '../../session/memory/index.js';
+import { MemoryStore, renderMemoriesForPrompt, type MemoryRecord } from '../../session/memory/index.js';
 import { WorkflowLoader, type WorkflowDefinition } from '../../workflow/index.js';
 
 export interface RuntimeContextOptions {
@@ -32,7 +32,7 @@ export async function loadRuntimeContext(cwd: string = process.cwd(), options: R
     readTextIfExists(join(cwd, 'ROXY.md'), 16_000),
     readJsonIfExists(join(cwd, '.roxycode', 'project.json')),
     readJsonIfExists(join(cwd, '.roxycode', 'profile.json')),
-    memoryStore.list({ limit: 100 }),
+    options.query ? memoryStore.recallRelevant(options.query, { limit: 5 }) : memoryStore.list({ limit: 5 }),
     workflowLoader.load().catch(() => ({ workflows: [] as WorkflowDefinition[] })),
   ]);
 
@@ -40,7 +40,7 @@ export async function loadRuntimeContext(cwd: string = process.cwd(), options: R
     roxyMd,
     projectJson,
     profile,
-    memories: options.query ? selectRelevantMemories(options.query, memories, { limit: 5 }) : memories.slice(0, 5),
+    memories,
     workflows: workflowResult.workflows,
   };
 }

@@ -1,16 +1,18 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 
-import type { LLMChunk, LLMProvider, LLMUsage } from '../src/core/types/llm.js';
+import type { LLMCallOptions, LLMChunk, LLMProvider, LLMUsage } from '../src/core/types/llm.js';
 import { assistantMessage, userMessage } from '../src/core/types/message.js';
 import {
   AutoMemoryExtractor,
   MEMORY_INDEX_MAX_ENTRIES,
+  MEMORY_INDEX_MAX_LINES,
   MemoryPolicyError,
   MemoryStore,
+  MemoryRetriever,
   buildMemoryGraph,
   extractMemoryLinks,
   renderMemoriesForPrompt,
@@ -89,13 +91,13 @@ test('memory store maintains MEMORY.md index and exposes store-level recall', as
     const store = new MemoryStore({ cwd, globalDir });
     const learning = await store.add({
       type: 'learning',
-      content: '?? TypeScript ????? [[typescript-style]]????????????',
+      content: '学习 TypeScript 时使用 [[typescript-style]]，先讲概念再给最小例子。',
       summary: 'typescript-style',
       tags: ['typescript', 'teaching'],
     });
     await store.add({
       type: 'workflow',
-      content: '????? pnpm test???????????????',
+      content: '提交前先运行 pnpm test，并用中文说明验证结果。',
       tags: ['verification'],
     });
 
@@ -110,7 +112,7 @@ test('memory store maintains MEMORY.md index and exposes store-level recall', as
     assert.equal(parsed.some(entry => entry.id === learning.record.id), true);
     assert.equal(parsed.some(entry => entry.links.includes('typescript-style')), true);
 
-    const recalled = await store.recallRelevant('?? TypeScript ????????', { limit: 1 });
+    const recalled = await store.recallRelevant('TypeScript 教学方式', { limit: 1 });
     assert.equal(recalled.length, 1);
     assert.equal(recalled[0].id, learning.record.id);
 
@@ -309,6 +311,38 @@ test('selectRelevantMemories prioritizes tagged and task-relevant memories', () 
   assert.ok(selected.every(record => record.id !== 'workflow-build'));
 });
 
+test('memory retriever uses TF-IDF style ranking and store recall caps top five', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-memory-retriever-'));
+  const globalDir = await mkdtemp(join(tmpdir(), 'roxy-memory-global-'));
+  try {
+    const store = new MemoryStore({ cwd, globalDir });
+    const target = await store.add({
+      type: 'reference',
+      content: 'Payment gateway reconciliation docs are at https://docs.example.test/payments/reconcile.',
+      summary: 'payment reconciliation reference',
+      tags: ['payments', 'reconciliation'],
+    });
+    for (let i = 0; i < 8; i++) {
+      await store.add({
+        type: 'user',
+        content: `User preference filler memory ${i} for concise status replies.`,
+        tags: ['style', `filler-${i}`],
+      });
+    }
+
+    const recalled = await store.recallRelevant('支付 payment reconciliation 文档在哪里', { limit: 5 });
+    assert.equal(recalled.length <= 5, true);
+    assert.equal(recalled[0].id, target.record.id);
+
+    const ranked = new MemoryRetriever(await store.list(), { now: Date.now() }).retrieve('payment reconciliation docs', { limit: 1 });
+    assert.equal(ranked[0].record.id, target.record.id);
+    assert.ok(ranked[0].matchedTerms.includes('payment') || ranked[0].matchedTerms.includes('reconciliation'));
+    assert.ok(ranked[0].reasons.some(reason => reason.startsWith('tag:') || reason.startsWith('summary:')));
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+    await rm(globalDir, { recursive: true, force: true });
+  }
+});
 test('auto memory extractor parses fenced JSON and filters invalid candidates', async () => {
   const provider = new FakeProvider([
     '```json',
@@ -349,6 +383,28 @@ test('auto memory extractor parses fenced JSON and filters invalid candidates', 
   assert.deepEqual(memories[0].tags, ['typescript', 'teaching']);
 });
 
+test('auto memory extractor can extract Claude-style core memory types with no tools', async () => {
+  const provider = new FakeProvider(JSON.stringify({
+    memories: [
+      { type: 'user', scope: 'global', content: 'User prefers concise Chinese explanations.', tags: ['style'], confidence: 0.9 },
+      { type: 'feedback', scope: 'global', content: 'Do not add trailing summaries when the diff is obvious.', tags: ['response'], confidence: 0.8 },
+      { type: 'project', scope: 'project', content: 'Checkout rewrite is driven by compliance deadline 2026-08-01.', tags: ['checkout'], confidence: 0.7 },
+      { type: 'reference', scope: 'project', content: 'Payment runbook lives at https://docs.example.test/payments.', tags: ['payments'], confidence: 0.9 },
+    ],
+  }));
+  const extractor = new AutoMemoryExtractor({ llmProvider: provider, language: 'zh-CN', characterId: 'roxy' });
+
+  const memories = await extractor.extract([
+    userMessage('我喜欢简洁中文。支付文档在 https://docs.example.test/payments。'),
+    assistantMessage('收到，我会只保存长期有用的信息。'),
+  ]);
+
+  assert.deepEqual(memories.map(memory => memory.type), ['user', 'feedback', 'project', 'reference']);
+  assert.equal(provider.chatCalls.length, 1);
+  assert.deepEqual(provider.chatCalls[0].tools, []);
+  assert.equal(provider.chatCalls[0].toolChoice, 'none');
+  assert.match(JSON.stringify(provider.chatCalls[0].messages), /受限的长期记忆提取子 Agent|restricted child agent/i);
+});
 test('auto memory extractor returns empty candidates on provider failure or short transcript', async () => {
   const failing = new FakeProvider('', true);
   const extractor = new AutoMemoryExtractor({ llmProvider: failing, language: 'zh-CN' });
@@ -387,11 +443,13 @@ class FakeProvider implements LLMProvider {
   readonly maxContextTokens = 8_000;
   readonly supportsTools = false;
   calls = 0;
+  readonly chatCalls: LLMCallOptions[] = [];
 
   constructor(private readonly text: string, private readonly shouldThrow = false) {}
 
-  async chat(): Promise<{ text: string; usage: LLMUsage }> {
+  async chat(options: LLMCallOptions): Promise<{ text: string; usage: LLMUsage }> {
     this.calls += 1;
+    this.chatCalls.push(options);
     if (this.shouldThrow) throw new Error('provider failed');
     return {
       text: this.text,

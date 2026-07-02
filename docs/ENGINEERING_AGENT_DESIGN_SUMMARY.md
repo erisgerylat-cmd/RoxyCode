@@ -1079,7 +1079,9 @@ RoxyCode 当前 Memory 相关文件：
 - `src/session/memory/types.ts`：定义 `user`、`project`、`feedback`、`reference`、`learning`、`workflow` 六类记忆，以及 `global|project` scope。
 - `src/session/memory/MemoryStore.ts`：实现 JSONL 事件存储、去重、归档、读取和 prompt 渲染。
 - `src/session/memory/MemoryPolicy.ts`：新增保存策略闸门，统一拦截密钥、代码事实、文件路径、git 活动、临时任务状态和高危 workflow 习惯。
-- `src/session/memory/AutoMemoryExtractor.ts`：通过 LLM 从近期会话提取长期记忆候选。
+- `src/session/memory/AutoMemoryExtractor.ts`：通过受限子 Agent 从近期会话提取长期记忆候选，调用时禁用工具。
+- `src/session/memory/MemoryPrompts.ts`：集中维护自动提取提示词、类型边界和禁止保存规则。
+- `src/session/memory/MemoryRetriever.ts`：本地 TF-IDF 召回，返回 top-k 相关记忆和匹配原因。
 - `src/commands/builtin/memory.ts`：实现 `/memory list|add|forget|types|policy|auto|paths`，并在策略拒绝时输出中文原因和建议。
 - `src/ui/repl/REPL.ts`：Agent 完成回答后触发自动记忆提取；不合格候选会被跳过，不影响主对话。
 - `src/engine/agent/RuntimeContext.ts`：每轮 Agent Loop 注入项目画像、个人画像、长期记忆和工作流摘要。
@@ -1127,9 +1129,9 @@ Claude Code 偏文件式 memory，适合高级开发者直接编辑 Markdown。R
 
 ### 25.5 后续应继续补齐
 
-当前还缺 Claude Code 级别的 selective recall：RoxyCode 现在注入最近 24 条 memory，后续应参考 `findRelevantMemories.ts`，按当前用户 query 选择最相关的 3-5 条。
+Selective recall 已补齐：`RuntimeContext` 现在通过 `MemoryStore.recallRelevant(query, { limit: 5 })` 注入最相关记忆。Claude Code 的 `findRelevantMemories.ts` 使用 side query 让模型从 memory manifest 中选文件；RoxyCode 当前先用 `MemoryRetriever` 做本地 TF-IDF，成本更低、结果可测试，后续可增加 LLM rerank 或向量召回。
 
-还应补齐 per-memory age note：参考 Claude Code `memoryAge.ts`，对旧记忆单独提醒“这是一条旧快照，使用前验证”。这能减少模型把历史事实当当前事实的风险。
+Per-memory age/staleness note 已补齐：参考 Claude Code `memoryAge.ts`，旧记忆会提示“这是一条旧快照，使用前验证”。这能减少模型把历史事实当当前事实的风险。
 
 最后建议增加自动记忆确认面板：候选记忆先展示给用户，角色用中文解释“为什么建议保存”，用户选择允许、拒绝或改写。这是 RoxyCode 可以强于 Claude Code 的产品化体验点。
 ## 26. Aesthetic And Deep Character Customization

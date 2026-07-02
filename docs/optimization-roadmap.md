@@ -25,25 +25,32 @@ Compared with the attached Claude Code analysis, some RoxyCode items are already
 
 ## Phase P0: Complete Core Infrastructure
 
-### P0.1 Memory Index and Graph
+### P0.1 Memory Index, Retrieval, and Graph
+
+Status: Done. Expanded in Memory 1.1 with `MemoryRetriever` and `MemoryPrompts`.
 
 Claude Code reference:
 
 - `memdir` keeps a `MEMORY.md` index and structured memory files.
-- Memory recall avoids loading everything blindly and warns that old memories may be stale.
+- `findRelevantMemories.ts` asks a side-query model to select up to 5 relevant memory files from a manifest.
+- `memoryAge.ts` warns that old memories may be stale.
 
-RoxyCode plan:
+RoxyCode implementation:
 
-- Add `MemoryIndex` for `MEMORY.md` rendering/parsing.
-- Add `MemoryGraph` for `[[cross-link]]` extraction and relation graph.
-- Make `MemoryStore` maintain per-scope `MEMORY.md` automatically.
-- Add `MemoryStore.recallRelevant(query, limit)` as the store-level retrieval entry.
+- `MemoryStore` keeps JSONL event logs as source of truth and maintains generated per-scope `MEMORY.md` indexes.
+- `MemoryIndex` renders/parses `MEMORY.md` and caps index output at 200 lines.
+- `MemoryRetriever` provides deterministic TF-IDF top-k recall, ready to be replaced or reranked by vectors later.
+- `MemoryPrompts` centralizes auto-extraction prompts and the save/do-not-save taxonomy.
+- `AutoMemoryExtractor` runs as a restricted child-agent call with `tools: []` and `toolChoice: none`.
+- `MemoryGraph` parses `[[cross-link]]` and marks resolved/unresolved edges.
+- `RuntimeContext` injects `MemoryStore.recallRelevant(query, { limit: 5 })` into the Agent system prompt.
 
 Acceptance:
 
 - `MEMORY.md` is automatically updated after add/archive/clear.
-- Index rendering is capped at 200 entries.
-- Query recall returns top relevant memories.
+- Index rendering is capped at 200 lines.
+- Query recall returns top-5 relevant memories.
+- Auto extraction supports user/feedback/project/reference plus RoxyCode learning/workflow.
 - `[[cross-link]]` syntax is parsed and test-covered.
 
 ### P0.2 Dynamic Command Sources

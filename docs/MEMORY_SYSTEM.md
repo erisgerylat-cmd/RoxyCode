@@ -60,7 +60,11 @@ src/session/memory/
   types.ts                 # Memory 类型、scope、source、记录结构
   MemoryStore.ts           # JSONL 事件日志存储、去重、归档、prompt 渲染
   MemoryPolicy.ts          # 保存前策略校验，拦截密钥、代码事实、git 活动、临时状态等
-  AutoMemoryExtractor.ts   # 通过 LLM 从近期会话中提取长期记忆候选
+  AutoMemoryExtractor.ts   # 通过受限子 Agent 从近期会话中提取长期记忆候选
+  MemoryPrompts.ts         # 自动提取提示词模板，定义类型边界和禁止保存内容
+  MemoryRetriever.ts       # 本地 TF-IDF 相关性召回，返回 top-k 与可解释匹配原因
+  MemoryIndex.ts           # MEMORY.md 渲染/解析，索引限制 200 行
+  MemoryGraph.ts           # [[cross-link]] 解析和关系图
   index.ts                 # barrel export
 
 src/commands/builtin/memory.ts
@@ -155,11 +159,9 @@ Memory 不是当前任务计划，也不是代码索引。
 
 ## 后续增强
 
-当前版本还没有做语义召回。现在 RuntimeContext 加载最近 24 条记忆，适合作为早期闭环，但不是最终形态。
-
 下一步建议：
 
-- 实现 query-time selective recall：参考 Claude Code `findRelevantMemories.ts`，只召回与当前问题明显相关的 3-5 条记忆
+- query-time selective recall 已实现：`MemoryStore.recallRelevant()` 通过 `MemoryRetriever` 召回 top-5；后续可升级向量索引或 LLM rerank
 - 为每条 memory 渲染 age/staleness note：参考 Claude Code `memoryAge.ts`，旧记忆单独提示“这是旧快照”
 - 增加自动记忆候选确认面板：角色用中文解释“为什么建议保存这条记忆”，用户可允许/拒绝
 - 增加 `/memory edit` 或 `/memory update`：允许用户修订旧记忆，而不是只能归档再添加
@@ -172,7 +174,7 @@ Memory 不是当前任务计划，也不是代码索引。
 
 实现位置：
 
-- `src/session/memory/MemoryRecall.ts`：新增本地确定性召回器，按当前用户 query、tags、content、memory type hint、scope、source、更新时间综合打分。
+- `src/session/memory/MemoryRetriever.ts`：新增本地 TF-IDF 召回器，按当前用户 query、tags、summary、content、memory type hint、scope、source、更新时间综合打分。`MemoryRecall.ts` 保留兼容出口。
 - `src/engine/agent/RuntimeContext.ts`：从原来的最近 24 条 memory 改为先读取候选，再根据当前用户输入选择最多 5 条注入 Agent RuntimeContext。
 - `src/session/memory/MemoryStore.ts`：prompt 渲染每条 memory 时追加更新时间，例如“今天 / 昨天 / N 天前”；超过 1 天的记忆会带旧快照提醒。
 - `src/engine/agent/AgentLoop.ts`：调用 `loadRuntimeContext` 时传入当前 `userInput`，让召回器能按任务选择记忆。
@@ -186,7 +188,7 @@ RoxyCode 当前选择：
 
 - 先实现本地确定性 selector，不额外消耗模型 token，不依赖网络，适合中文用户和国产模型不稳定时的基础体验。
 - 召回结果更可预测，也便于后续给 `/memory recall <query>` 做可解释展示。
-- 缺点是语义能力弱于 Claude Code 的 LLM selector。后续可以在 `MemoryRecall.ts` 上增加可选 LLM rerank：本地召回先筛 20 条，再让模型选 3-5 条。
+- 缺点是语义能力弱于 Claude Code 的 LLM selector。后续可以在 `MemoryRetriever.ts` 上增加可选 LLM rerank：本地召回先筛 20 条，再让模型选 3-5 条。
 
 产品化意义：
 
@@ -201,7 +203,20 @@ RoxyCode now keeps a generated MEMORY.md next to each memory.jsonl file. This fo
 - Global memories: ~/.roxycode/memory.jsonl and ~/.roxycode/MEMORY.md
 - Project memories: .roxycode/memory.jsonl and .roxycode/MEMORY.md
 - The index is rebuilt after add, archive, and clear.
-- Index rendering is capped at 200 entries to avoid bloating prompt-visible context.
+- Index rendering is capped at 200 lines to avoid bloating prompt-visible context.
 - Memory text may reference another memory with [[memory-id]] or [[summary-slug]]. MemoryGraph parses those links and marks edges as resolved or unresolved.
 
 Compared with Claude Code, RoxyCode keeps the JSONL event log for auditability and adds the Markdown index as a teaching-friendly view rather than replacing the store.
+
+## 2026-07-02 更新：Memory 1.1 验收状态
+
+本轮按“对标 Claude Code 自动记忆提取和召回”的验收标准补齐了工程入口：
+
+- `MemoryStore`：继续作为唯一写入/读取入口，维护 `memory.jsonl` 和生成式 `MEMORY.md`。
+- `MemoryIndex`：`MEMORY.md` 自动维护，索引渲染最多 200 行，避免像 Claude Code 一样把过长索引塞满上下文。
+- `MemoryRetriever`：新增本地 TF-IDF 召回，默认 top-5；比 Claude Code 的 `findRelevantMemories.ts` LLM selector 语义弱，但无需额外模型调用、可离线测试，适合作为向量召回前的稳定底座。
+- `AutoMemoryExtractor` + `MemoryPrompts`：自动提取改为受限子 Agent，LLM 请求显式 `tools: []` 和 `toolChoice: none`，只能读 transcript，不能调用工具或访问工作区。
+- `RuntimeContext`：AgentLoop 通过 `MemoryStore.recallRelevant(query, { limit: 5 })` 注入系统提示词。
+- `MemoryGraph`：支持 `[[cross-link]]` 解析，已用于索引和关系图。
+
+Claude Code 对照：Claude Code 的 `memdir` 偏 Markdown 文件目录、frontmatter、`MEMORY.md` 索引和 LLM side query 选择文件；RoxyCode 选择 JSONL 事件日志作为真源，再生成 `MEMORY.md` 给人审阅。优势是更适合中文命令、审计、去重、归档和未来可视化；劣势是当前 TF-IDF 语义召回不如 Claude Code 的模型选择器。

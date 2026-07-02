@@ -159,7 +159,7 @@ RoxyCode 会持续对照本地 Claude Code 源码 `D:\Programing\cc\claude-code-
 | Agent Loop | ❌ 未实现 | 仅有接口和设计文档 | Lite/Economic/Standard/Ultimate 执行内核缺失 |
 | 权限系统 | ❌ 未实现 | 配置中有 security 字段 | 缺少 PermissionGuard、确认流程、审计日志 |
 | 会话持久化 | ❌ 未实现 | 有类型设计 | 缺少 JSONL SessionStore、resume、export、rewind |
-| Memory | ❌ 未实现 | 有概念设计 | 缺少 user/feedback/project/reference/learning/workflow 分类和检索 |
+| Memory | ✅ 已实现 | `src/session/memory` | JSONL 事件存储、MEMORY.md 索引、user/feedback/project/reference/learning/workflow 分类、TF-IDF top-5 召回、自动提取和 cross-link |
 | Workflow | ✅ 已实现 | `/workflow`、`.roxycode/workflows/*.yml`、内置中文业务工作流、Agent Loop 投递 | 后续可继续做动态 Skill 命令和可视化编辑 |
 | Profile | ❌ 未实现 | 新产品定位已明确 | 缺少个人画像和项目画像 |
 | MCP/Plugin/Hook | ❌ 未实现 | 配置和文档预留 | 缺少协议客户端、Hook schema、插件加载器 |
@@ -628,8 +628,8 @@ src/
 ### Phase 4：Memory + Workflow + Skill
 
 ```
-□ Memory 分类：user / feedback / project / reference / learning / workflow
-□ Memory 读写与过期验证规则
+✅ Memory 分类：user / feedback / project / reference / learning / workflow
+✅ Memory 读写、MEMORY.md 索引、top-5 召回与过期验证规则
 ✅ Workflow YAML schema
 ✅ 内置中文工作流：spring-crud / vue-page / bug-fix / test-generate / code-review
 □ Skill 命令动态加载

@@ -1,7 +1,8 @@
 import type { MemoryRecord, MemoryScope, MemoryType } from './types.js';
 import { extractMemoryLinks } from './MemoryGraph.js';
 
-export const MEMORY_INDEX_MAX_ENTRIES = 200;
+export const MEMORY_INDEX_MAX_LINES = 200;
+export const MEMORY_INDEX_MAX_ENTRIES = 192;
 
 export interface MemoryIndexEntry {
   id: string;
@@ -20,19 +21,13 @@ export interface RenderMemoryIndexOptions {
 }
 
 export function renderMemoryIndex(records: MemoryRecord[], options: RenderMemoryIndexOptions): string {
-  const limit = Math.max(1, Math.min(options.limit ?? MEMORY_INDEX_MAX_ENTRIES, MEMORY_INDEX_MAX_ENTRIES));
-  const sorted = [...records].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
   const generatedAt = new Date(options.generatedAt ?? Date.now()).toISOString();
-  const lines = [
-    '# RoxyCode Memory Index',
-    '',
-    `scope: ${options.scope}`,
-    `generatedAt: ${generatedAt}`,
-    `entries: ${sorted.length}`,
-    '',
-    'This file is generated from memory.jsonl. Edit memories with /memory commands instead of editing this index directly.',
-    '',
-  ];
+  const requestedLimit = Math.max(1, Math.min(options.limit ?? MEMORY_INDEX_MAX_ENTRIES, MEMORY_INDEX_MAX_ENTRIES));
+  const header = buildHeader(options.scope, generatedAt, 0);
+  const lineBudget = Math.max(0, MEMORY_INDEX_MAX_LINES - header.length);
+  const limit = Math.min(requestedLimit, lineBudget);
+  const sorted = [...records].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
+  const lines = buildHeader(options.scope, generatedAt, sorted.length);
 
   for (const record of sorted) {
     const summary = sanitizeInline(record.summary || record.content, 120);
@@ -48,7 +43,7 @@ export function renderMemoryIndex(records: MemoryRecord[], options: RenderMemory
     lines.push(`- [${record.type}/${record.scope}] [[${record.id}]] ${summary}${suffix ? ` (${suffix})` : ''}`);
   }
 
-  return `${lines.join('\n')}\n`;
+  return `${lines.slice(0, MEMORY_INDEX_MAX_LINES).join('\n')}\n`;
 }
 
 export function parseMemoryIndex(markdown: string): MemoryIndexEntry[] {
@@ -71,6 +66,19 @@ export function parseMemoryIndex(markdown: string): MemoryIndexEntry[] {
     });
   }
   return entries;
+}
+
+function buildHeader(scope: MemoryScope, generatedAt: string, entries: number): string[] {
+  return [
+    '# RoxyCode Memory Index',
+    '',
+    `scope: ${scope}`,
+    `generatedAt: ${generatedAt}`,
+    `entries: ${entries}`,
+    '',
+    'This file is generated from memory.jsonl. Edit memories with /memory commands instead of editing this index directly.',
+    '',
+  ];
 }
 
 function sanitizeInline(value: string, max: number): string {
