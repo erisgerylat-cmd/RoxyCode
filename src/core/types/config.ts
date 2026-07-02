@@ -1,12 +1,26 @@
 import type { AestheticMode, CharacterId } from '../../aesthetic/character/types.js';
 
+export type MCPTransportType = 'stdio' | 'sse' | 'http' | 'streamable-http' | 'ws' | 'websocket';
+
+export interface MCPOAuthConfig {
+  clientId?: string;
+  clientSecret?: string;
+  scope?: string;
+  callbackPort?: number;
+  issuerUrl?: string;
+  authServerMetadataUrl?: string;
+  authorizationUrl?: string;
+  tokenUrl?: string;
+}
+
 export interface MCPServerConfig {
-  type?: 'stdio' | 'sse' | 'http';
+  type?: MCPTransportType;
   command?: string;
   args?: string[];
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  oauth?: MCPOAuthConfig;
   enabled?: boolean;
   timeoutMs?: number;
 }

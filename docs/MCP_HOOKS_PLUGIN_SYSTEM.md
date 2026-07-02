@@ -39,18 +39,54 @@ src/commands/builtin/extensions.ts
 
 ## MCP 设计
 
-RoxyCode 支持 `.roxycode/mcp.json`：
+RoxyCode 支持 `.roxycode/mcp.json` 和 `config.mcp.servers` 中的六类传输配置：
+
+- `stdio`：本地进程 MCP server，保留最稳定的离线/本地工具链路径。
+- `http`：普通 JSON-RPC POST，适合远程 MCP 网关。
+- `streamable-http`：使用 HTTP transport，但默认声明 `application/json, text/event-stream`，对齐 MCP Streamable HTTP 思路。
+- `sse`：GET 打开事件流，收到 endpoint 后 POST JSON-RPC 消息。
+- `ws`：WebSocket 传输，使用 `mcp` 子协议。
+- `websocket`：面向中文用户更直观的别名，内部仍走 WebSocket transport。
+
+示例：
 
 ```json
 {
   "mcpServers": {
-    "example": {
+    "localExample": {
       "type": "stdio",
       "command": "node",
       "args": ["path/to/server.js"],
-      "env": {},
-      "enabled": true,
+      "enabled": false,
       "timeoutMs": 30000
+    },
+    "remoteHttp": {
+      "type": "streamable-http",
+      "url": "https://example.com/mcp",
+      "headers": {},
+      "enabled": false
+    },
+    "remoteSse": {
+      "type": "sse",
+      "url": "https://example.com/sse",
+      "enabled": false
+    },
+    "remoteWs": {
+      "type": "ws",
+      "url": "wss://example.com/mcp",
+      "enabled": false
+    },
+    "oauthRemote": {
+      "type": "websocket",
+      "url": "https://example.com/mcp",
+      "oauth": {
+        "clientId": "your-client-id",
+        "authorizationUrl": "https://auth.example.com/authorize",
+        "tokenUrl": "https://auth.example.com/token",
+        "callbackPort": 39111,
+        "scope": "tools.read tools.call"
+      },
+      "enabled": false
     }
   }
 }
@@ -61,7 +97,10 @@ RoxyCode 支持 `.roxycode/mcp.json`：
 ```text
 .roxycode/mcp.json / config.mcp.servers / plugin.mcpServers
   -> McpConfigLoader
-  -> McpStdioClient initialize + tools/list
+  -> McpTransportFactory
+  -> JsonRpcMcpClient
+  -> Transport(stdio/http/streamable-http/sse/ws/websocket)
+  -> initialize + notifications/initialized + tools/list + tools/call
   -> McpToolAdapter
   -> ToolRegistry
   -> PermissionGuard
@@ -71,11 +110,12 @@ RoxyCode 支持 `.roxycode/mcp.json`：
 
 MCP tool 会被命名为 `mcp__server__tool`。这样做参考 Claude Code 的 MCP tool 序列化设计，但 RoxyCode 用更显式的名称暴露来源，便于中文用户理解“这个工具来自哪个外部服务”。
 
+对照 Claude Code：Claude Code 在 `services/mcp/client.ts` 中直接使用 MCP SDK 的 `StdioClientTransport`、`SSEClientTransport`、`StreamableHTTPClientTransport` 和自定义 WebSocket transport，并在 `services/mcp/auth.ts` 中实现完整 OAuth/PKCE 与安全凭据存储。RoxyCode 本阶段选择轻量实现：不新增 SDK/WS 依赖，先用统一 `Transport` 接口和内置 `fetch`/运行时 WebSocket 跑通协议闭环。
+
 当前取舍：
 
-- 优势：无新增依赖、项目本地配置可读、MCP 工具复用现有权限确认和审计。
-- 劣势：当前只实现 stdio 最小路径，尚未支持 HTTP/SSE/WS/OAuth、资源订阅和复杂 MCP channel policy。
-
+- 优势：无新增依赖、项目本地配置可读、中文 `/mcp init` 模板覆盖六类配置，MCP 工具继续复用现有权限确认和审计。
+- 劣势：TokenStore 目前是本地 JSON 文件，不如 Claude Code 的系统级安全存储；WebSocket 依赖运行时提供 `globalThis.WebSocket`，后续应补 keychain 后端和可选 `ws` 适配器。
 ## Hooks 设计
 
 支持事件：
@@ -181,7 +221,7 @@ RoxyCode 优化点是把配置入口产品化：用户先用 `/mcp init`、`/hoo
 
 下一步可以继续补：
 
-- MCP HTTP/SSE/WS 与 OAuth。
+- MCP 资源订阅、断线重连、keychain TokenStore 后端和 MCP SDK 兼容测试。
 - Hooks allowlist、环境变量白名单、HTTP 域名策略。
 - Plugin marketplace、版本缓存、依赖校验、签名或可信源。
 - 插件贡献角色包、主题包、状态栏术语包。

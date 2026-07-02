@@ -1,27 +1,20 @@
 import type { McpServerDefinition } from '../types.js';
-import type { McpClientTransport } from './types.js';
+import { HTTPTransport } from './HTTPTransport.js';
+import { JsonRpcMcpClient } from './JsonRpcMcpClient.js';
+import { SSETransport } from './SSETransport.js';
+import { normalizeTransportType, type McpTransport } from './Transport.js';
+import { WebSocketTransport } from './WebSocketTransport.js';
 
-export class RemoteMcpClient implements McpClientTransport {
-  readonly server: McpServerDefinition;
-
+export class RemoteMcpClient extends JsonRpcMcpClient {
   constructor(server: McpServerDefinition) {
-    this.server = server;
+    super(server, createRemoteTransport(server));
   }
+}
 
-  async listTools(): Promise<unknown[]> {
-    throw new Error(this.unsupportedMessage('tools/list'));
-  }
-
-  async callTool(name: string, _args: Record<string, unknown>): Promise<unknown> {
-    throw new Error(this.unsupportedMessage(`tools/call ${name}`));
-  }
-
-  async close(): Promise<void> {
-    // Remote transports are config-only in this phase, so there is no socket to close yet.
-  }
-
-  private unsupportedMessage(operation: string): string {
-    const type = (this.server.type ?? 'stdio').toUpperCase();
-    return `${type} MCP transport is configured for ${this.server.name}, but runtime connection is not implemented yet (${operation}). 当前版本已支持配置校验和列表展示，工具发现/调用将在下一阶段接入 MCP SDK 与 OAuth/重连策略。`;
-  }
+function createRemoteTransport(server: McpServerDefinition): McpTransport {
+  const type = normalizeTransportType(server.type);
+  if (type === 'sse') return new SSETransport(server);
+  if (type === 'http' || type === 'streamable-http') return new HTTPTransport(server);
+  if (type === 'ws' || type === 'websocket') return new WebSocketTransport(server);
+  throw new Error(`RemoteMcpClient only supports remote MCP transports: ${String(server.type)}`);
 }

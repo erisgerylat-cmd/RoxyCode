@@ -113,22 +113,39 @@ Acceptance:
 
 ### P1.1 MCP Transports
 
+Status: Done. Implemented in MCP Transport 2.1 with six configured protocols and OAuth PKCE support.
+
 Claude Code reference:
 
-- stdio, SSE, HTTP, WebSocket, SDK, and in-process transports.
+- `src/services/mcp/types.ts` models MCP transport variants and remote server metadata.
+- `src/services/mcp/client.ts` selects stdio, SSE, streamable HTTP, and WebSocket transports, then drives the same JSON-RPC initialize/tools/list/tools/call loop.
+- `src/services/mcp/auth.ts` handles OAuth/PKCE and secure token persistence for authenticated remote MCP servers.
+- `src/utils/mcpWebSocketTransport.ts` wraps JSON-RPC messages over WebSocket callbacks.
 
-RoxyCode plan:
+RoxyCode implementation:
 
-- Introduce a `Transport` abstraction.
-- Keep stdio stable first.
-- Add SSE and HTTP clients before WebSocket/OAuth.
+- `src/mcp/transports/Transport.ts` defines the shared JSON-RPC transport contract and normalizes six config values: `stdio`, `sse`, `http`, `streamable-http`, `ws`, `websocket`.
+- `JsonRpcMcpClient` centralizes initialize, initialized notification, tools/list, tools/call, timeouts, and pending request handling.
+- `StdioTransport` preserves the original process-based MCP path.
+- `HTTPTransport` supports JSON-RPC POST and streamable HTTP responses with `application/json, text/event-stream` accept headers.
+- `SSETransport` opens a server event stream, handles endpoint events, and posts client JSON-RPC messages back to the discovered endpoint.
+- `WebSocketTransport` maps HTTP(S) URLs to WS(S), sends JSON-RPC over the `mcp` subprotocol, and fails clearly when the runtime has no global WebSocket.
+- `OAuthFlow` implements PKCE request creation, authorization-code exchange, refresh, and token injection through remote transport headers.
+- `TokenStore` stores tokens in a local JSON file with atomic write semantics; this is lighter than Claude Code keychain integration and can be swapped later.
+- `/mcp init` now generates examples for stdio, HTTP, streamable HTTP, SSE, WS, WebSocket alias, and OAuth.
+
+Tradeoff:
+
+- Claude Code benefits from mature MCP SDK transports and secure OS credential storage.
+- RoxyCode keeps dependencies minimal and user-visible configuration simpler, which is better for the current Chinese-first teaching/product stage, but future hardening should replace local token JSON with a keychain backend and add MCP SDK compatibility tests.
 
 Acceptance:
 
 - Existing stdio MCP behavior is unchanged.
-- SSE/HTTP transport config can be validated and listed.
-- Tool annotations still map to read-only/destructive/open-world hints.
-
+- Six transport config values are validated, loaded, and factory-created.
+- HTTP JSON-RPC initialize/tools/list/tools/call is test-covered.
+- OAuth PKCE authorization URL, token exchange, refresh-ready storage, and authorization header injection are implemented.
+- Tool annotations still map to read-only/destructive/open-world hints through the existing MCP tool adapter.
 ### P1.2 Hook and Character Behavior Extensions
 
 Claude Code reference:

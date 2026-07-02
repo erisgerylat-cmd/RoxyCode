@@ -70,10 +70,38 @@ async function initMcp(language: Lang, args: string[]): Promise<void> {
         enabled: false,
         timeoutMs: 30000,
       },
+      streamableHttpExample: {
+        type: 'streamable-http',
+        url: 'https://example.com/mcp',
+        headers: { accept: 'application/json, text/event-stream' },
+        enabled: false,
+        timeoutMs: 30000,
+      },
       sseExample: {
         type: 'sse',
         url: 'https://example.com/sse',
         headers: {},
+        enabled: false,
+        timeoutMs: 30000,
+      },
+      wsExample: {
+        type: 'ws',
+        url: 'wss://example.com/mcp',
+        headers: {},
+        enabled: false,
+        timeoutMs: 30000,
+      },
+      websocketAliasExample: {
+        type: 'websocket',
+        url: 'https://example.com/mcp',
+        headers: {},
+        oauth: {
+          clientId: 'your-client-id',
+          authorizationUrl: 'https://auth.example.com/authorize',
+          tokenUrl: 'https://auth.example.com/token',
+          callbackPort: 39111,
+          scope: 'tools.read tools.call',
+        },
         enabled: false,
         timeoutMs: 30000,
       },
@@ -82,11 +110,10 @@ async function initMcp(language: Lang, args: string[]): Promise<void> {
   console.log(chalk.green(`  ${zh(language, '已生成 MCP 配置模板', 'MCP config template created')}: ${target}`));
   console.log(chalk.dim(zh(
     language,
-    '  将 enabled 改为 true 后，stdio 工具会注册为 mcp__server__tool；HTTP/SSE 当前先支持配置校验和列表展示。',
-    '  Set enabled=true to register stdio tools as mcp__server__tool. HTTP/SSE configs are validated and listed first.',
+    '  将 enabled 改为 true 后，MCP 工具会注册为 mcp__server__tool；stdio、HTTP、Streamable HTTP、SSE、WS/WebSocket 均会进入统一权限与审计流程。',
+    '  Set enabled=true to register MCP tools as mcp__server__tool. stdio, HTTP, Streamable HTTP, SSE, and WS/WebSocket all use the unified permission and audit flow.',
   )));
 }
-
 async function listMcp(options: ExtensionCommandOptions, language: Lang): Promise<void> {
   const config = options.configManager.snapshot();
   const pluginResult = await new PluginLoader({ cwd: process.cwd(), config }).load();

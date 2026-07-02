@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, isAbsolute, resolve } from 'node:path';
-import type { MCPServerConfig, RoxyCodeConfig } from '../core/types/config.js';
+import type { MCPOAuthConfig, MCPServerConfig, MCPTransportType, RoxyCodeConfig } from '../core/types/config.js';
 import type { McpJsonFile, McpLoadError, McpLoadResult, McpServerDefinition } from './types.js';
 
 export interface McpConfigLoaderOptions {
@@ -95,7 +95,7 @@ function addNormalizedServer(
 
 function normalizeServer(name: string, config: MCPServerConfig, source: 'config' | 'plugin'): NormalizeResult {
   if (!config || typeof config !== 'object') return { error: 'MCP server config must be an object.' };
-  const type = config.type ?? 'stdio';
+  const type = normalizeTransportType(config.type);
   const normalizedName = normalizeServerName(name);
   const base = {
     ...config,
@@ -105,6 +105,7 @@ function normalizeServer(name: string, config: MCPServerConfig, source: 'config'
     timeoutMs: typeof config.timeoutMs === 'number' ? config.timeoutMs : undefined,
     env: normalizeEnv(config.env),
     headers: normalizeHeaders(config.headers),
+    oauth: normalizeOAuth(config.oauth),
     source,
   };
 
@@ -122,9 +123,9 @@ function normalizeServer(name: string, config: MCPServerConfig, source: 'config'
     };
   }
 
-  if (type === 'sse' || type === 'http') {
-    if (typeof config.url !== 'string' || !isValidHttpUrl(config.url)) {
-      return { error: `${type.toUpperCase()} transport requires an http(s) url.` };
+  if (isRemoteTransport(type)) {
+    if (typeof config.url !== 'string' || !isValidRemoteUrl(type, config.url)) {
+      return { error: `${transportLabel(type)} transport requires a valid url.` };
     }
     return {
       server: {
@@ -153,13 +154,46 @@ function normalizeHeaders(headers: unknown): Record<string, string> | undefined 
   return out;
 }
 
-function isValidHttpUrl(value: string): boolean {
+function normalizeOAuth(value: unknown): MCPOAuthConfig | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const input = value as Record<string, unknown>;
+  const out: MCPOAuthConfig = {};
+  for (const key of ['clientId', 'clientSecret', 'scope', 'issuerUrl', 'authServerMetadataUrl', 'authorizationUrl', 'tokenUrl'] as const) {
+    if (typeof input[key] === 'string') out[key] = input[key].trim();
+  }
+  if (typeof input.callbackPort === 'number') out.callbackPort = input.callbackPort;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function normalizeTransportType(type: unknown): MCPTransportType {
+  if (typeof type !== 'string' || type.trim() === '') return 'stdio';
+  const normalized = type.trim().toLowerCase();
+  if (normalized === 'websocket') return 'websocket';
+  if (normalized === 'ws') return 'ws';
+  if (normalized === 'streamable-http') return 'streamable-http';
+  if (normalized === 'http') return 'http';
+  if (normalized === 'sse') return 'sse';
+  return normalized as MCPTransportType;
+}
+
+function isRemoteTransport(type: MCPTransportType): boolean {
+  return type === 'sse' || type === 'http' || type === 'streamable-http' || type === 'ws' || type === 'websocket';
+}
+
+function isValidRemoteUrl(type: MCPTransportType, value: string): boolean {
   try {
     const url = new URL(value);
+    if (type === 'ws' || type === 'websocket') return ['ws:', 'wss:', 'http:', 'https:'].includes(url.protocol);
     return url.protocol === 'http:' || url.protocol === 'https:';
   } catch {
     return false;
   }
+}
+
+function transportLabel(type: MCPTransportType): string {
+  if (type === 'streamable-http') return 'STREAMABLE_HTTP';
+  if (type === 'ws' || type === 'websocket') return 'WEBSOCKET';
+  return type.toUpperCase();
 }
 
 export function normalizeServerName(value: string): string {

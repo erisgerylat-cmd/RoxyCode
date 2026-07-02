@@ -1,5 +1,8 @@
-import type { MCPServerConfig } from '../core/types/config.js';
+import type { MCPOAuthConfig, MCPServerConfig, MCPTransportType } from '../core/types/config.js';
 import type { ToolParameterSchema } from '../tool/types.js';
+
+export type McpTransportType = MCPTransportType;
+export type McpOAuthConfig = MCPOAuthConfig;
 
 export interface McpServerDefinition extends MCPServerConfig {
   name: string;

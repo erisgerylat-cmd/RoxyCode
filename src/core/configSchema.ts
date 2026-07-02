@@ -285,7 +285,7 @@ function validateMcpServers(
 ): void {
   const servers = getNestedValue(config, 'mcp.servers');
   if (!isPlainObject(servers)) return;
-  const supportedTypes = new Set(['stdio', 'sse', 'http']);
+  const supportedTypes = new Set(['stdio', 'sse', 'http', 'streamable-http', 'ws', 'websocket']);
   for (const [name, value] of Object.entries(servers)) {
     const base = `mcp.servers.${name}`;
     if (!isPlainObject(value)) {
@@ -308,7 +308,7 @@ function validateMcpServers(
         message: 'MCP server type must be a string.',
         severity: 'error',
         source,
-        expected: 'stdio | sse | http',
+        expected: 'stdio | sse | http | streamable-http | ws | websocket',
         actual: describeType(rawType),
       });
     } else if (!supportedTypes.has(type)) {
@@ -317,7 +317,7 @@ function validateMcpServers(
         message: 'Unsupported MCP transport type.',
         severity: 'error',
         source,
-        expected: 'stdio | sse | http',
+        expected: 'stdio | sse | http | streamable-http | ws | websocket',
         actual: String(rawType),
       });
     }
@@ -354,6 +354,7 @@ function validateMcpServers(
     }
     if (value.env !== undefined) validateStringRecord(`${base}.env`, value.env, source, issues);
     if (value.headers !== undefined) validateStringRecord(`${base}.headers`, value.headers, source, issues);
+    if (value.oauth !== undefined) validateMcpOAuth(`${base}.oauth`, value.oauth, source, issues);
 
     if (type === 'stdio') {
       if (typeof value.command !== 'string' || value.command.trim() === '') {
@@ -369,14 +370,14 @@ function validateMcpServers(
       continue;
     }
 
-    if (type === 'sse' || type === 'http') {
-      if (typeof value.url !== 'string' || !isValidHttpUrl(value.url)) {
+    if (isRemoteMcpTransport(type)) {
+      if (typeof value.url !== 'string' || !isValidRemoteUrl(type, value.url)) {
         issues.push({
           path: `${base}.url`,
-          message: `${type.toUpperCase()} MCP server requires an http(s) URL.`,
+          message: `${transportLabel(type)} MCP server requires a valid URL.`,
           severity: 'error',
           source,
-          expected: 'http(s) URL',
+          expected: type === 'ws' || type === 'websocket' ? 'ws(s) or http(s) URL' : 'http(s) URL',
           actual: describeType(value.url),
         });
       }
@@ -384,6 +385,33 @@ function validateMcpServers(
   }
 }
 
+function validateMcpOAuth(
+  path: string,
+  value: unknown,
+  source: ConfigSourceKind | undefined,
+  issues: ConfigValidationIssue[],
+): void {
+  if (!isPlainObject(value)) {
+    issues.push({ path, message: 'OAuth config must be an object.', severity: 'error', source, expected: 'object', actual: describeType(value) });
+    return;
+  }
+  for (const key of ['clientId', 'clientSecret', 'scope', 'issuerUrl', 'authServerMetadataUrl', 'authorizationUrl', 'tokenUrl']) {
+    const nested = value[key];
+    if (nested !== undefined && typeof nested !== 'string') {
+      issues.push({ path: `${path}.${key}`, message: 'OAuth field must be a string.', severity: 'error', source, expected: 'string', actual: describeType(nested) });
+    }
+  }
+  const callbackPort = value.callbackPort;
+  if (callbackPort !== undefined && (typeof callbackPort !== 'number' || !Number.isInteger(callbackPort) || callbackPort <= 0)) {
+    issues.push({ path: `${path}.callbackPort`, message: 'callbackPort must be a positive integer.', severity: 'error', source, expected: 'positive integer', actual: describeType(callbackPort) });
+  }
+  for (const key of ['issuerUrl', 'authServerMetadataUrl', 'authorizationUrl', 'tokenUrl']) {
+    const nested = value[key];
+    if (typeof nested === 'string' && !isValidHttpUrl(nested)) {
+      issues.push({ path: `${path}.${key}`, message: 'OAuth URL must use http(s).', severity: 'error', source, expected: 'http(s) URL', actual: nested });
+    }
+  }
+}
 function validateStringRecord(
   path: string,
   value: unknown,
@@ -413,6 +441,26 @@ function validateStringRecord(
       });
     }
   }
+}
+
+function isRemoteMcpTransport(type: string): boolean {
+  return type === 'sse' || type === 'http' || type === 'streamable-http' || type === 'ws' || type === 'websocket';
+}
+
+function isValidRemoteUrl(type: string, value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (type === 'ws' || type === 'websocket') return ['ws:', 'wss:', 'http:', 'https:'].includes(url.protocol);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function transportLabel(type: string): string {
+  if (type === 'streamable-http') return 'STREAMABLE_HTTP';
+  if (type === 'ws' || type === 'websocket') return 'WEBSOCKET';
+  return type.toUpperCase();
 }
 
 function isValidHttpUrl(value: string): boolean {
