@@ -1,19 +1,19 @@
-import type { Tool } from '../types.js';
+import type { Tool, ToolProgressEvent } from '../types.js';
+import { buildTool } from '../builder/ToolBuilder.js';
 import { formatToolResult } from '../executor/ToolExecutor.js';
-import { emitToolProgress } from '../progress/ToolProgress.js';
 import { okBody, optionalNumberArg, stringArg, truncate } from '../utils/args.js';
 import { runCommand } from '../utils/process.js';
 import { classifyShellRuntime } from '../utils/shellRisk.js';
 
-export const executeCommandTool: Tool = {
+export const executeCommandTool: Tool = buildTool({
   definition: {
     name: 'execute_command',
-    description: '\u6267\u884c\u672c\u5730 shell \u547d\u4ee4\u3002',
+    description: '执行本地 shell 命令。',
     parameters: {
       type: 'object',
       properties: {
-        command: { type: 'string', description: '\u8981\u6267\u884c\u7684\u547d\u4ee4\u3002' },
-        timeout_ms: { type: 'number', description: '\u8d85\u65f6\u65f6\u95f4\u3002', default: 30000 },
+        command: { type: 'string', description: '要执行的命令。' },
+        timeout_ms: { type: 'number', description: '超时时间。', default: 30000 },
       },
       required: ['command'],
     },
@@ -21,6 +21,8 @@ export const executeCommandTool: Tool = {
   isReadOnly: false,
   riskLevel: 'high',
   concurrency: 'exclusive',
+  concurrencySafe: false,
+  destructive: true,
   interruptBehavior: 'block',
   isConcurrencySafe(args, ctx) {
     const command = typeof args.command === 'string' ? args.command : '';
@@ -32,30 +34,63 @@ export const executeCommandTool: Tool = {
   },
   getPermissionPrompt(args, ctx) {
     return {
-      title: ctx.language === 'en-US' ? 'Confirm command execution' : '\u786e\u8ba4\u6267\u884c\u547d\u4ee4',
-      message: ctx.language === 'en-US' ? 'Shell commands can modify files or system state.' : 'Shell \u547d\u4ee4\u53ef\u80fd\u4fee\u6539\u6587\u4ef6\u6216\u7cfb\u7edf\u72b6\u6001\u3002',
+      title: ctx.language === 'en-US' ? 'Confirm command execution' : '确认执行命令',
+      message: ctx.language === 'en-US' ? 'Shell commands can modify files or system state.' : 'Shell 命令可能修改文件或系统状态。',
       details: [`command: ${stringArg(args, 'command')}`],
       riskLevel: 'high',
     };
   },
-  async execute(args, ctx) {
+  async *stream(args, ctx) {
     const started = Date.now();
     const command = stringArg(args, 'command');
     const timeoutMs = optionalNumberArg(args, 'timeout_ms') ?? 30_000;
     const shellRisk = classifyShellRuntime(command, ctx);
-    emitToolProgress(ctx, { type: 'command_start', command, timeoutMs, shellLevel: shellRisk.safetyLevel });
-    const output = await runShell(command, ctx, timeoutMs);
-    emitToolProgress(ctx, {
-      type: 'command_complete',
-      command,
-      exitCode: output.exitCode,
-      timedOut: output.timedOut,
-      stdoutChars: output.stdout.length,
-      stderrChars: output.stderr.length,
-    });
+    yield { type: 'progress', progress: { type: 'command_start', command, timeoutMs, shellLevel: shellRisk.safetyLevel } };
+
+    const pendingProgress: ToolProgressEvent[] = [];
+    let wake: (() => void) | null = null;
+    const pushProgress = (event: ToolProgressEvent) => {
+      pendingProgress.push(event);
+      wake?.();
+      wake = null;
+    };
+    const outputPromise = runShell(command, ctx, timeoutMs, pushProgress);
+    let output: Awaited<ReturnType<typeof runShell>>;
+
+    while (true) {
+      while (pendingProgress.length > 0) {
+        yield { type: 'progress', progress: pendingProgress.shift()! };
+      }
+
+      const race = await Promise.race([
+        outputPromise.then(value => ({ type: 'done' as const, value }), error => ({ type: 'error' as const, error })),
+        new Promise<{ type: 'progress' }>(resolve => { wake = () => resolve({ type: 'progress' }); }),
+      ]);
+
+      if (race.type === 'progress') continue;
+      wake = null;
+      if (race.type === 'error') throw race.error;
+      output = race.value;
+      break;
+    }
+
+    while (pendingProgress.length > 0) {
+      yield { type: 'progress', progress: pendingProgress.shift()! };
+    }
+    yield {
+      type: 'progress',
+      progress: {
+        type: 'command_complete',
+        command,
+        exitCode: output.exitCode,
+        timedOut: output.timedOut,
+        stdoutChars: output.stdout.length,
+        stderrChars: output.stderr.length,
+      },
+    };
     const stdout = truncate(output.stdout, 12_000);
     const stderr = truncate(output.stderr, 4_000);
-    const body = okBody('\u547d\u4ee4\u6267\u884c\u5b8c\u6210', [
+    const body = okBody('命令执行完成', [
       `command: ${command}`,
       `exit_code: ${output.exitCode}`,
       `stdout:\n${stdout.text || '(empty)'}`,
@@ -72,10 +107,10 @@ export const executeCommandTool: Tool = {
   getAuditSummary(args, result) {
     return { command: args.command, operation: 'execute', success: result?.success };
   },
-};
+});
 
-function runShell(command: string, ctx: Parameters<typeof runCommand>[2], timeoutMs: number) {
-  const onOutput = (stream: 'stdout' | 'stderr', text: string) => emitToolProgress(ctx, { type: 'output_chunk', command, stream, text });
+function runShell(command: string, ctx: Parameters<typeof runCommand>[2], timeoutMs: number, onProgress: (event: ToolProgressEvent) => void) {
+  const onOutput = (stream: 'stdout' | 'stderr', text: string) => onProgress({ type: 'output_chunk', command, stream, text });
   if (process.platform === 'win32') {
     return runCommand('powershell.exe', ['-NoProfile', '-Command', command], ctx, { timeoutMs, onOutput });
   }

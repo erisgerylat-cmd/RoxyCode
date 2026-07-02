@@ -1,7 +1,8 @@
-﻿import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { Tool } from '../types.js';
 import { formatToolResult } from '../executor/ToolExecutor.js';
+import { emitToolProgress } from '../progress/ToolProgress.js';
 import { okBody, resolveToolPath, stringArg } from '../utils/args.js';
 import { throwIfAborted } from '../utils/abort.js';
 import { createDiffPreview } from '../utils/diff.js';
@@ -23,6 +24,8 @@ export const writeFileTool: Tool = {
   isReadOnly: false,
   riskLevel: 'high',
   concurrency: 'exclusive',
+  concurrencySafe: false,
+  destructive: true,
   interruptBehavior: 'block',
   isDestructive() {
     return true;
@@ -65,11 +68,13 @@ export const writeFileTool: Tool = {
     if (validation.error) throw new Error(validation.error);
     const oldContent = validation.snapshot.exists ? validation.snapshot.content : '';
     const diff = createDiffPreview(oldContent, content);
+    emitToolProgress(ctx, { type: 'status', toolName: 'write_file', phase: 'execute', message: ctx.language === 'en-US' ? `Writing ${path}` : `正在写入 ${path}` });
     await mkdir(dirname(path), { recursive: true });
     throwIfAborted(ctx);
     await writeFile(path, content, 'utf-8');
     throwIfAborted(ctx);
     await recordFullFileState(path, content, ctx);
+    emitToolProgress(ctx, { type: 'status', toolName: 'write_file', phase: 'complete', message: ctx.language === 'en-US' ? `Wrote ${path}` : `已写入 ${path}` });
     const bytes = Buffer.byteLength(content, 'utf8');
     const operation = validation.snapshot.exists ? 'update' : 'create';
     const body = okBody('\u5199\u5165\u6587\u4ef6\u5b8c\u6210', [

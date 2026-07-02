@@ -1,6 +1,7 @@
-﻿import type { RoxyCodeConfig } from '../core/types/config.js';
+import type { ToolResult } from '../core/types/message.js';
+import type { RoxyCodeConfig } from '../core/types/config.js';
 import type { HookRunner } from '../hooks/types.js';
-import type { ToolCall, ToolResult } from '../core/types/message.js';
+import type { ToolCall } from '../core/types/message.js';
 import type { TelemetryLogger } from '../telemetry/index.js';
 import type { FileReadState } from './security/FileReadState.js';
 
@@ -18,6 +19,10 @@ export type ToolProgressEvent =
   | { type: 'command_complete'; command: string; exitCode: number | null; timedOut: boolean; stdoutChars: number; stderrChars: number }
   | { type: 'mcp_call'; server: string; tool: string; phase: 'start' | 'complete'; readOnly: boolean; destructive: boolean; openWorld: boolean; success?: boolean };
 export type ToolProgressSink = (event: ToolProgressEvent) => void;
+export type ToolStreamEvent =
+  | { type: 'progress'; progress: ToolProgressEvent }
+  | { type: 'result'; result: ToolResult };
+export type ToolStream = AsyncGenerator<ToolStreamEvent, ToolResult | void, unknown> | AsyncIterable<ToolStreamEvent>;
 export type ToolPermissionMode = 'strict' | 'auto-approve' | 'read-only';
 export type ToolPermissionBehavior = 'allow' | 'deny' | 'ask';
 export type ToolPermissionDecisionReason =
@@ -119,13 +124,18 @@ export interface Tool {
   readonly shouldDefer?: boolean;
   readonly concurrency?: ToolConcurrency;
   readonly interruptBehavior?: ToolInterruptBehavior;
+  /** Static scheduling hint. Input-specific tools can override with isConcurrencySafe(). */
+  readonly concurrencySafe?: boolean;
+  /** Static risk hint for destructive behavior. Input-specific tools can override with isDestructive(). */
+  readonly destructive?: boolean;
   readonly isReadOnly: boolean;
   readonly riskLevel: ToolRiskLevel;
   backfillObservableInput?(input: Record<string, unknown>): void;
   preparePermissionMatcher?(args: Record<string, unknown>, ctx: ToolExecutionContext): Promise<(pattern: string) => boolean>;
   isConcurrencySafe?(args: Record<string, unknown>, ctx: ToolExecutionContext): boolean;
   isDestructive?(args: Record<string, unknown>, ctx: ToolExecutionContext): boolean;
-  execute(args: Record<string, unknown>, ctx: ToolExecutionContext): Promise<ToolResult>;
+  stream?(args: Record<string, unknown>, ctx: ToolExecutionContext): ToolStream;
+  execute?(args: Record<string, unknown>, ctx: ToolExecutionContext): Promise<ToolResult>;
   preflight?(args: Record<string, unknown>, ctx: ToolExecutionContext): Promise<string | null>;
   getAffectedPaths?(args: Record<string, unknown>, ctx: ToolExecutionContext): string[];
   getPermissionPrompt?(args: Record<string, unknown>, ctx: ToolExecutionContext): ToolPermissionPrompt;
@@ -152,5 +162,3 @@ export interface ToolAuditRecord {
   error?: string;
   metadata?: Record<string, unknown>;
 }
-
-

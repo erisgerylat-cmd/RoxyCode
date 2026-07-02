@@ -1,17 +1,18 @@
 import type { Tool } from '../types.js';
 import { formatToolResult } from '../executor/ToolExecutor.js';
+import { emitToolProgress } from '../progress/ToolProgress.js';
 import { okBody, optionalStringArg } from '../utils/args.js';
 import { runCommand } from '../utils/process.js';
 
 export const gitTool: Tool = {
   definition: {
     name: 'git',
-    description: '\u6267\u884c\u53d7\u9650 Git \u64cd\u4f5c\uff1astatus\u3001diff\u3001log\u3001branch\u3002',
+    description: '执行受限 Git 操作：status、diff、log、branch。',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', description: 'Git \u64cd\u4f5c\u3002', enum: ['status', 'diff', 'log', 'branch'] },
-        target: { type: 'string', description: '\u53ef\u9009\u76ee\u6807\uff0c\u4f8b\u5982\u6587\u4ef6\u8def\u5f84\u3001\u5206\u652f\u540d\u6216\u63d0\u4ea4\u8303\u56f4\u3002' },
+        operation: { type: 'string', description: 'Git 操作。', enum: ['status', 'diff', 'log', 'branch'] },
+        target: { type: 'string', description: '可选目标，例如文件路径、分支名或提交范围。' },
       },
       required: ['operation'],
     },
@@ -19,6 +20,8 @@ export const gitTool: Tool = {
   isReadOnly: true,
   riskLevel: 'low',
   concurrency: 'safe',
+  concurrencySafe: true,
+  destructive: false,
   interruptBehavior: 'cancel',
   isDestructive() {
     return false;
@@ -32,10 +35,16 @@ export const gitTool: Tool = {
     const operation = optionalStringArg(args, 'operation') ?? 'status';
     const target = optionalStringArg(args, 'target');
     const gitArgs = buildGitArgs(operation, target);
-    const output = await runCommand('git', gitArgs, ctx, { timeoutMs: 30_000 });
-    const body = okBody('Git \u64cd\u4f5c\u5b8c\u6210', [
+    const command = `git ${gitArgs.join(' ')}`;
+    emitToolProgress(ctx, { type: 'command_start', command, timeoutMs: 30_000, shellLevel: 'allow' });
+    const output = await runCommand('git', gitArgs, ctx, {
+      timeoutMs: 30_000,
+      onOutput: (stream, text) => emitToolProgress(ctx, { type: 'output_chunk', command, stream, text }),
+    });
+    emitToolProgress(ctx, { type: 'command_complete', command, exitCode: output.exitCode, timedOut: output.timedOut, stdoutChars: output.stdout.length, stderrChars: output.stderr.length });
+    const body = okBody('Git 操作完成', [
       `operation: ${operation}`,
-      `command: git ${gitArgs.join(' ')}`,
+      `command: ${command}`,
       `exit_code: ${output.exitCode}`,
       `stdout:\n${output.stdout || '(empty)'}`,
       `stderr:\n${output.stderr || '(empty)'}`,

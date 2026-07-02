@@ -22,7 +22,7 @@ export function describeToolProgress(event: ToolProgressEvent, language: 'zh-CN'
     case 'search_match':
       return zh ? `搜索匹配 ${event.matchCount}: ${shortPath(event.path)}:${event.line}` : `Match ${event.matchCount}: ${shortPath(event.path)}:${event.line}`;
     case 'search_complete':
-      return zh ? `搜索完成，${event.matches} 个匹配` : `Search complete, ${event.matches} matches`;
+      return zh ? `搜索完成：${event.matches} 个匹配` : `Search complete, ${event.matches} matches`;
     case 'command_start':
       return zh ? `正在执行命令: ${clip(event.command, 80)}` : `Running command: ${clip(event.command, 80)}`;
     case 'output_chunk':

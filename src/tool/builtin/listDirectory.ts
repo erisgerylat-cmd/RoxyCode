@@ -2,7 +2,8 @@ import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Tool } from '../types.js';
 import { formatToolResult } from '../executor/ToolExecutor.js';
-import { okBody, optionalNumberArg, optionalStringArg, resolveToolPath, stringArg } from '../utils/args.js';
+import { emitToolProgress } from '../progress/ToolProgress.js';
+import { okBody, optionalNumberArg, optionalStringArg, resolveToolPath } from '../utils/args.js';
 import { throwIfAborted } from '../utils/abort.js';
 
 export const listDirectoryTool: Tool = {
@@ -20,7 +21,12 @@ export const listDirectoryTool: Tool = {
   isReadOnly: true,
   riskLevel: 'low',
   concurrency: 'safe',
+  concurrencySafe: true,
+  destructive: false,
   interruptBehavior: 'cancel',
+  isDestructive() {
+    return false;
+  },
   getAffectedPaths(args, ctx) {
     return [resolveToolPath(ctx, optionalStringArg(args, 'path') ?? '.')];
   },
@@ -29,6 +35,7 @@ export const listDirectoryTool: Tool = {
     const path = resolveToolPath(ctx, optionalStringArg(args, 'path') ?? '.');
     const maxEntries = Math.max(1, optionalNumberArg(args, 'max_entries') ?? 200);
     throwIfAborted(ctx);
+    emitToolProgress(ctx, { type: 'status', toolName: 'list_directory', phase: 'execute', message: ctx.language === 'en-US' ? `Listing ${path}` : `正在列出 ${path}` });
     const entries = await readdir(path, { withFileTypes: true });
     throwIfAborted(ctx);
     const selected = entries.slice(0, maxEntries);
@@ -40,6 +47,7 @@ export const listDirectoryTool: Tool = {
       const size = info?.isFile() ? `${info.size}b` : '';
       return `${kind.padEnd(4)} ${entry.name}${size ? ` ${size}` : ''}`;
     }));
+    emitToolProgress(ctx, { type: 'status', toolName: 'list_directory', phase: 'complete', message: ctx.language === 'en-US' ? `Listed ${selected.length}/${entries.length} entries` : `已列出 ${selected.length}/${entries.length} 个条目` });
     const body = okBody('列出目录完成', [`path: ${path}`, `entries: ${selected.length}/${entries.length}`, lines.join('\n') || '(empty)']);
     return {
       success: true,

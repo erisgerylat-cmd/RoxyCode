@@ -178,6 +178,14 @@ export class ToolExecutor {
       }
 
       backups = await backupAffectedFiles(tool, invocation.arguments, ctx);
+      if (!tool.execute) {
+        throw new ToolExecutionError('Tool has no executor: ' + tool.definition.name, {
+          code: 'TOOL_EXECUTOR_MISSING',
+          telemetryMessage: 'Tool executor missing',
+          recoveryAction: 'retry',
+          details: { toolName: tool.definition.name },
+        });
+      }
       result = await tool.execute(invocation.arguments, ctx);
       result = await processToolResultSize(tool, result, ctx, id);
       const afterHook = await ctx.hooks?.run('after_tool', {

@@ -213,6 +213,7 @@ function isConcurrencySafe(tool: Tool, args: Record<string, unknown>, ctx: ToolE
       return false;
     }
   }
+  if (typeof tool.concurrencySafe === 'boolean') return tool.concurrencySafe;
   if (tool.concurrency) return tool.concurrency === 'safe';
   if (tool.shouldDefer) return true;
   return tool.isReadOnly && tool.riskLevel === 'low';

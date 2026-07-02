@@ -1,6 +1,7 @@
-﻿import { writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import type { Tool } from '../types.js';
 import { formatToolResult } from '../executor/ToolExecutor.js';
+import { emitToolProgress } from '../progress/ToolProgress.js';
 import { okBody, optionalBooleanArg, resolveToolPath, stringArg } from '../utils/args.js';
 import { throwIfAborted } from '../utils/abort.js';
 import { createDiffPreview } from '../utils/diff.js';
@@ -24,6 +25,8 @@ export const editFileTool: Tool = {
   isReadOnly: false,
   riskLevel: 'high',
   concurrency: 'exclusive',
+  concurrencySafe: false,
+  destructive: true,
   interruptBehavior: 'block',
   isDestructive() {
     return true;
@@ -96,10 +99,12 @@ export const editFileTool: Tool = {
     const content = validation.snapshot.content;
     const updated = replaceAll ? content.split(oldString).join(newString) : content.replace(oldString, newString);
     const diff = createDiffPreview(content, updated);
+    emitToolProgress(ctx, { type: 'status', toolName: 'edit_file', phase: 'execute', message: ctx.language === 'en-US' ? `Editing ${path}` : `正在编辑 ${path}` });
     throwIfAborted(ctx);
     await writeFile(path, updated, 'utf-8');
     throwIfAborted(ctx);
     await recordFullFileState(path, updated, ctx);
+    emitToolProgress(ctx, { type: 'status', toolName: 'edit_file', phase: 'complete', message: ctx.language === 'en-US' ? `Edited ${path}` : `已编辑 ${path}` });
     const body = okBody('\u7f16\u8f91\u6587\u4ef6\u5b8c\u6210', [
       `path: ${path}`,
       `replace_all: ${replaceAll}`,

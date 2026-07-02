@@ -86,21 +86,28 @@ Acceptance:
 
 ### P0.3 Tool Progress Contract
 
+Status: Done. Implemented with streaming tool contracts, builtin progress events, and MCP streaming adapters.
+
 Claude Code reference:
 
-- Tools expose progress through async generator events and carry concurrency/destructive hints.
+- `Tool.ts` defines per-tool `isConcurrencySafe(input)`, `isReadOnly(input)`, optional `isDestructive(input)`, and interrupt behavior.
+- `BashTool/BashTool.tsx` and `PowerShellTool/PowerShellTool.tsx` consume async command generators and forward progress via `onProgress` before returning the final tool result.
+- MCP tools keep a dedicated progress renderer and preserve read-only/destructive/open-world metadata from server annotations.
 
-RoxyCode plan:
+RoxyCode implementation:
 
-- Preserve the current `ToolExecutor` contract for compatibility.
-- Add a typed progress event adapter around builtin tools.
-- Ensure `read_file`, `grep_search`, and `execute_command` emit progress metadata usable by UI/diagnostics.
+- `src/tool/types.ts` now defines `ToolStreamEvent`, `ToolStream`, static `concurrencySafe`, static `destructive`, and optional `stream()` on `Tool`.
+- `src/tool/builder/ToolBuilder.ts` bridges `stream()` tools into the existing `execute()` contract, forwarding progress to `ctx.onProgress` and preserving the existing `ToolExecutor -> PermissionGuard -> AuditLog` path.
+- `read_file`, `grep_search`, and `execute_command` now implement async generator streams and yield structured progress before returning `ToolResult`.
+- `write_file`, `edit_file`, `list_directory`, and `git` emit structured progress too, so every builtin tool has observable execution state.
+- `McpToolAdapter` wraps MCP calls as streaming tools and maps `readOnlyHint`, `destructiveHint`, and `openWorldHint` into scheduling and permission metadata.
+- Chinese progress copy was cleaned so status bar/tool activity output no longer displays mojibake.
 
 Acceptance:
 
 - Builtin tool progress can be rendered without parsing plain output.
-- Concurrency and destructive metadata remain available to multi-agent scheduling.
-- MCP tools keep annotations mapped into the same metadata model.
+- Concurrency and destructive metadata are available as static hints and input-aware functions for multi-agent scheduling.
+- MCP tools are adapted as streaming tools and keep annotation-derived read-only/destructive/open-world metadata.
 
 ## Phase P1: Expand Ecosystem and Stability
 

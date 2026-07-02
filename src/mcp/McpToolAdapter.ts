@@ -1,6 +1,6 @@
 import type { Tool, ToolDefinition, ToolParameterProperty, ToolParameterSchema } from '../tool/types.js';
+import { buildTool } from '../tool/builder/ToolBuilder.js';
 import { formatToolResult } from '../tool/executor/ToolExecutor.js';
-import { emitToolProgress } from '../tool/progress/ToolProgress.js';
 import type { McpServerDefinition, McpToolAnnotations, McpToolDefinition } from './types.js';
 import { createMcpTransport } from './McpTransportFactory.js';
 import type { McpClientTransport } from './transports/types.js';
@@ -47,7 +47,7 @@ export class McpToolAdapter {
     const readOnly = mcpTool.annotations?.readOnlyHint === true;
     const destructive = mcpTool.annotations?.destructiveHint === true;
     const openWorld = mcpTool.annotations?.openWorldHint === true;
-    return {
+    return buildTool({
       definition: {
         name: mcpTool.roxyName,
         description: `[MCP:${server.name}] ${mcpTool.description}`,
@@ -56,6 +56,8 @@ export class McpToolAdapter {
       isReadOnly: readOnly,
       riskLevel: destructive ? 'high' : readOnly ? 'low' : 'medium',
       concurrency: readOnly ? 'safe' : 'exclusive',
+      concurrencySafe: readOnly,
+      destructive,
       interruptBehavior: readOnly ? 'cancel' : 'block',
       isConcurrencySafe() {
         return readOnly;
@@ -79,12 +81,12 @@ export class McpToolAdapter {
           riskLevel: destructive ? 'high' : readOnly ? 'low' : 'medium',
         };
       },
-      async execute(args, ctx) {
+      async *stream(args, ctx) {
         const started = Date.now();
-        emitToolProgress(ctx, { type: 'mcp_call', server: server.name, tool: mcpTool.originalName, phase: 'start', readOnly, destructive, openWorld });
+        yield { type: 'progress', progress: { type: 'mcp_call', server: server.name, tool: mcpTool.originalName, phase: 'start', readOnly, destructive, openWorld } };
         const rawResult = await getClient().callTool(mcpTool.originalName, args);
         const success = !isMcpErrorResult(rawResult);
-        emitToolProgress(ctx, { type: 'mcp_call', server: server.name, tool: mcpTool.originalName, phase: 'complete', readOnly, destructive, openWorld, success });
+        yield { type: 'progress', progress: { type: 'mcp_call', server: server.name, tool: mcpTool.originalName, phase: 'complete', readOnly, destructive, openWorld, success } };
         const body = renderMcpResult(server.name, mcpTool.originalName, rawResult, ctx.language !== 'en-US');
         return {
           success,
@@ -97,7 +99,7 @@ export class McpToolAdapter {
       getAuditSummary(args, result) {
         return { operation: 'mcp_tool_call', server: server.name, tool: mcpTool.originalName, success: result?.success, readOnly, destructive, openWorld, args };
       },
-    };
+    });
   }
 }
 
