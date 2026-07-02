@@ -1,5 +1,5 @@
 ﻿import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
@@ -8,9 +8,13 @@ import type { LLMChunk, LLMProvider, LLMUsage } from '../src/core/types/llm.js';
 import { assistantMessage, userMessage } from '../src/core/types/message.js';
 import {
   AutoMemoryExtractor,
+  MEMORY_INDEX_MAX_ENTRIES,
   MemoryPolicyError,
   MemoryStore,
+  buildMemoryGraph,
+  extractMemoryLinks,
   renderMemoriesForPrompt,
+  renderMemoryIndex,
   selectRelevantMemories,
   type MemoryRecord,
   type MemoryScope,
@@ -75,6 +79,74 @@ test('memory store deduplicates by type, scope, and normalized content', async (
     await rm(cwd, { recursive: true, force: true });
     await rm(globalDir, { recursive: true, force: true });
   }
+});
+
+
+test('memory store maintains MEMORY.md index and exposes store-level recall', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-memory-index-'));
+  const globalDir = await mkdtemp(join(tmpdir(), 'roxy-memory-global-'));
+  try {
+    const store = new MemoryStore({ cwd, globalDir });
+    const learning = await store.add({
+      type: 'learning',
+      content: '?? TypeScript ????? [[typescript-style]]????????????',
+      summary: 'typescript-style',
+      tags: ['typescript', 'teaching'],
+    });
+    await store.add({
+      type: 'workflow',
+      content: '????? pnpm test???????????????',
+      tags: ['verification'],
+    });
+
+    const indexPath = store.getIndexPaths().global;
+    const index = await readFile(indexPath, 'utf8');
+    assert.match(index, /# RoxyCode Memory Index/);
+    assert.match(index, /learning\/global/);
+    assert.match(index, /\[\[typescript-style\]\]/);
+
+    const parsed = await store.readIndex('global');
+    assert.equal(parsed.length, 2);
+    assert.equal(parsed.some(entry => entry.id === learning.record.id), true);
+    assert.equal(parsed.some(entry => entry.links.includes('typescript-style')), true);
+
+    const recalled = await store.recallRelevant('?? TypeScript ????????', { limit: 1 });
+    assert.equal(recalled.length, 1);
+    assert.equal(recalled[0].id, learning.record.id);
+
+    await store.archive(learning.record.id);
+    const afterArchive = await readFile(indexPath, 'utf8');
+    assert.doesNotMatch(afterArchive, new RegExp(learning.record.id));
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+    await rm(globalDir, { recursive: true, force: true });
+  }
+});
+
+test('memory graph extracts cross links and index rendering caps entries', () => {
+  const now = Date.now();
+  const records = [
+    createMemoryRecord({ id: 'learning-ts', type: 'learning', summary: 'typescript-style', content: 'Use [[workflow-review]] when explaining TypeScript.', updatedAt: now }),
+    createMemoryRecord({ id: 'workflow-review', type: 'workflow', summary: 'workflow-review', content: 'Run tests before final response.', updatedAt: now - 1 }),
+    ...Array.from({ length: MEMORY_INDEX_MAX_ENTRIES + 5 }, (_, index) => createMemoryRecord({
+      id: 'user-extra-' + index,
+      type: 'user',
+      content: 'extra memory ' + index,
+      updatedAt: now - 10 - index,
+    })),
+  ];
+
+  assert.deepEqual(extractMemoryLinks('See [[workflow-review]] and [[workflow-review]].'), ['workflow-review']);
+  const graph = buildMemoryGraph(records.slice(0, 2));
+  assert.equal(graph.nodes.length, 2);
+  assert.equal(graph.edges.length, 1);
+  assert.equal(graph.edges[0].from, 'learning-ts');
+  assert.equal(graph.edges[0].to, 'workflow-review');
+  assert.equal(graph.edges[0].resolved, true);
+
+  const rendered = renderMemoryIndex(records, { scope: 'global', generatedAt: now });
+  const bulletCount = rendered.split('\n').filter(line => line.startsWith('- [')).length;
+  assert.equal(bulletCount, MEMORY_INDEX_MAX_ENTRIES);
 });
 
 test('memory store archives records and supports query search over content, summary, and tags', async () => {

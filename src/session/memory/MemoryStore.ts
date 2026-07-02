@@ -5,7 +5,8 @@ import { dirname, join } from 'node:path';
 import { MEMORY_TYPES, type AddMemoryInput, type AddMemoryResult, type MemoryListOptions, type MemoryRecord, type MemoryScope, type MemoryType } from './types.js';
 import { defaultScopeForMemoryType } from './types.js';
 import { assertMemoryPolicy } from './MemoryPolicy.js';
-import { memoryAge, memoryFreshnessText } from './MemoryRecall.js';
+import { memoryAge, memoryFreshnessText, selectRelevantMemories, type MemoryRecallOptions } from './MemoryRecall.js';
+import { parseMemoryIndex, renderMemoryIndex, type MemoryIndexEntry } from './MemoryIndex.js';
 
 export interface MemoryStoreOptions {
   cwd?: string;
@@ -39,6 +40,8 @@ export class MemoryStore {
   readonly projectDir: string;
   readonly globalPath: string;
   readonly projectPath: string;
+  readonly globalIndexPath: string;
+  readonly projectIndexPath: string;
 
   constructor(options: MemoryStoreOptions = {}) {
     this.cwd = options.cwd ?? process.cwd();
@@ -46,6 +49,8 @@ export class MemoryStore {
     this.projectDir = join(this.cwd, '.roxycode');
     this.globalPath = join(this.globalDir, 'memory.jsonl');
     this.projectPath = join(this.projectDir, 'memory.jsonl');
+    this.globalIndexPath = join(this.globalDir, 'MEMORY.md');
+    this.projectIndexPath = join(this.projectDir, 'MEMORY.md');
   }
 
   async add(input: AddMemoryInput): Promise<AddMemoryResult> {
@@ -73,6 +78,7 @@ export class MemoryStore {
     };
 
     await this.append(scope, { event: 'add', timestamp: now, record });
+    await this.rebuildIndex(scope);
     return { record, created: true };
   }
 
@@ -112,6 +118,7 @@ export class MemoryStore {
     const record = await this.get(id);
     if (!record) return false;
     await this.append(record.scope, { event: 'archive', timestamp: Date.now(), id: record.id, reason });
+    await this.rebuildIndex(record.scope);
     return true;
   }
 
@@ -119,10 +126,25 @@ export class MemoryStore {
     const path = this.pathForScope(scope);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, '', 'utf8');
+    await this.rebuildIndex(scope);
   }
 
   getPaths(): Record<MemoryScope, string> {
     return { global: this.globalPath, project: this.projectPath };
+  }
+
+  getIndexPaths(): Record<MemoryScope, string> {
+    return { global: this.globalIndexPath, project: this.projectIndexPath };
+  }
+
+  async readIndex(scope: MemoryScope): Promise<MemoryIndexEntry[]> {
+    const path = this.indexPathForScope(scope);
+    if (!existsSync(path)) return [];
+    return parseMemoryIndex(await readFile(path, 'utf8'));
+  }
+
+  async recallRelevant(query: string, options: MemoryRecallOptions = {}): Promise<MemoryRecord[]> {
+    return selectRelevantMemories(query, await this.list({ includeArchived: false }), options);
   }
 
   async getStats(options: { enabled?: boolean; language?: 'zh-CN' | 'en-US' } = {}): Promise<MemoryStats> {
@@ -187,6 +209,17 @@ export class MemoryStore {
 
   private pathForScope(scope: MemoryScope): string {
     return scope === 'global' ? this.globalPath : this.projectPath;
+  }
+
+  private indexPathForScope(scope: MemoryScope): string {
+    return scope === 'global' ? this.globalIndexPath : this.projectIndexPath;
+  }
+
+  private async rebuildIndex(scope: MemoryScope): Promise<void> {
+    const path = this.indexPathForScope(scope);
+    const records = await this.list({ scope, includeArchived: false });
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, renderMemoryIndex(records, { scope }), 'utf8');
   }
 }
 

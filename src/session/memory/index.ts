@@ -3,6 +3,10 @@ export type { MemoryStats } from './MemoryStore.js';
 export { AutoMemoryExtractor } from './AutoMemoryExtractor.js';
 export { MemoryPolicyError, assertMemoryPolicy, evaluateMemoryCandidate } from './MemoryPolicy.js';
 export type { MemoryPolicyEvaluation, MemoryPolicySeverity } from './MemoryPolicy.js';
+export { MEMORY_INDEX_MAX_ENTRIES, parseMemoryIndex, renderMemoryIndex } from './MemoryIndex.js';
+export type { MemoryIndexEntry, RenderMemoryIndexOptions } from './MemoryIndex.js';
+export { buildMemoryGraph, extractMemoryLinks } from './MemoryGraph.js';
+export type { MemoryGraph, MemoryGraphEdge, MemoryGraphNode } from './MemoryGraph.js';
 export type {
   AddMemoryInput,
   AddMemoryResult,

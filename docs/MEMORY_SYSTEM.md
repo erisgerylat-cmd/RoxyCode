@@ -192,3 +192,16 @@ RoxyCode 当前选择：
 
 - RoxyCode 不再把所有长期记忆塞进上下文，而是让“每个人自己的 Claude Code”只带当前任务真正需要的个人偏好、学习方式和工作流习惯。
 - 旧记忆会显式提醒“这是旧快照”，更适合教学型、中文业务开发和长期个性化使用，减少模型根据过期信息误导用户。
+
+
+## MEMORY.md Index and Cross Links
+
+RoxyCode now keeps a generated MEMORY.md next to each memory.jsonl file. This follows Claude Code's memdir idea: keep a compact Markdown index for human review while the durable source of truth remains structured storage.
+
+- Global memories: ~/.roxycode/memory.jsonl and ~/.roxycode/MEMORY.md
+- Project memories: .roxycode/memory.jsonl and .roxycode/MEMORY.md
+- The index is rebuilt after add, archive, and clear.
+- Index rendering is capped at 200 entries to avoid bloating prompt-visible context.
+- Memory text may reference another memory with [[memory-id]] or [[summary-slug]]. MemoryGraph parses those links and marks edges as resolved or unresolved.
+
+Compared with Claude Code, RoxyCode keeps the JSONL event log for auditability and adds the Markdown index as a teaching-friendly view rather than replacing the store.
