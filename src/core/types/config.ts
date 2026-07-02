@@ -19,6 +19,7 @@ export interface RoxyCodeConfig {
   llm: {
     provider: string;
     model: string;
+    fallbackModels: string[];
     apiKey?: string;
     baseUrl?: string;
   };
@@ -98,6 +99,7 @@ export const DEFAULT_CONFIG: RoxyCodeConfig = {
   llm: {
     provider: 'qwen',
     model: 'qwen-max',
+    fallbackModels: [],
   },
   ui: {
     language: 'zh-CN',

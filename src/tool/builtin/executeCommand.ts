@@ -1,7 +1,8 @@
-﻿import type { Tool } from '../types.js';
+import type { Tool } from '../types.js';
 import { formatToolResult } from '../executor/ToolExecutor.js';
 import { okBody, optionalNumberArg, stringArg, truncate } from '../utils/args.js';
 import { runCommand } from '../utils/process.js';
+import { classifyShellRuntime } from '../utils/shellRisk.js';
 
 export const executeCommandTool: Tool = {
   definition: {
@@ -18,6 +19,12 @@ export const executeCommandTool: Tool = {
   },
   isReadOnly: false,
   riskLevel: 'high',
+  concurrency: 'exclusive',
+  interruptBehavior: 'block',
+  isConcurrencySafe(args, ctx) {
+    const command = typeof args.command === 'string' ? args.command : '';
+    return classifyShellRuntime(command, ctx).concurrencySafe;
+  },
   getPermissionPrompt(args, ctx) {
     return {
       title: ctx.language === 'en-US' ? 'Confirm command execution' : '确认执行命令',
@@ -30,6 +37,7 @@ export const executeCommandTool: Tool = {
     const started = Date.now();
     const command = stringArg(args, 'command');
     const timeoutMs = optionalNumberArg(args, 'timeout_ms') ?? 30_000;
+    const shellRisk = classifyShellRuntime(command, ctx);
     const output = await runShell(command, ctx, timeoutMs);
     const stdout = truncate(output.stdout, 12_000);
     const stderr = truncate(output.stderr, 4_000);
@@ -41,10 +49,10 @@ export const executeCommandTool: Tool = {
     ]);
     return {
       success: output.exitCode === 0 && !output.timedOut,
-      output: formatToolResult('execute_command', output.exitCode === 0 && !output.timedOut, body, ctx, { command, exitCode: output.exitCode, timedOut: output.timedOut }),
+      output: formatToolResult('execute_command', output.exitCode === 0 && !output.timedOut, body, ctx, { command, exitCode: output.exitCode, timedOut: output.timedOut, shellLevel: shellRisk.safetyLevel }),
       error: output.exitCode === 0 && !output.timedOut ? undefined : `Command failed with exit code ${output.exitCode}`,
       duration: Date.now() - started,
-      metadata: { command, exitCode: output.exitCode, timedOut: output.timedOut, stdoutTruncated: stdout.truncated, stderrTruncated: stderr.truncated },
+      metadata: { command, exitCode: output.exitCode, timedOut: output.timedOut, shellLevel: shellRisk.safetyLevel, matchedRule: shellRisk.matchedRule, stdoutTruncated: stdout.truncated, stderrTruncated: stderr.truncated },
     };
   },
   getAuditSummary(args, result) {

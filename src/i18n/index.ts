@@ -1,5 +1,3 @@
-import type { I18n } from './types.js';
-
 export type Language = 'zh-CN' | 'en-US';
 
 export interface I18nText {
@@ -466,42 +464,6 @@ export const i18n: Record<Language, I18nText> = {
 
 export function t(language: Language): I18nText {
   return i18n[language] ?? i18n[DEFAULT_LANGUAGE];
-}
-
-/**
- * 创建 I18n 实例
- */
-export function createI18n(language: Language): I18n {
-  const texts = t(language);
-
-  return {
-    t(key: string, params?: Record<string, any>): string {
-      const keys = key.split('.');
-      let value: any = texts;
-
-      for (const k of keys) {
-        if (value && typeof value === 'object' && k in value) {
-          value = value[k];
-        } else {
-          return key; // 键不存在，返回原键
-        }
-      }
-
-      if (typeof value !== 'string') {
-        return key;
-      }
-
-      // 替换参数
-      if (params) {
-        return value.replace(/\{(\w+)\}/g, (_, paramKey) => {
-          return params[paramKey]?.toString() || '';
-        });
-      }
-
-      return value;
-    },
-    language,
-  };
 }
 
 

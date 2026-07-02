@@ -4,6 +4,18 @@
 
 ---
 
+## 当前实现校准（2026-06-29）
+
+当前代码已经从早期设计里的 `src/agent` 迁移到 `src/engine/agent`。因此，工作区里旧 `src/agent/*`、旧 `src/tool/adapters/*`、旧 `src/tool/builtin/*/index.ts`、旧 `src/tool/executor/ToolExecutionPipeline.ts` 的删除是架构收口，不是缺失文件。
+
+当前真实主干：
+- Agent Loop：`src/engine/agent/AgentLoop.ts`、`RuntimeContext.ts`、`TokenBudget.ts`。
+- 工具系统：`src/tool/registry/ToolRegistry.ts`、`src/tool/permission/PermissionGuard.ts`、`src/tool/executor/ToolExecutor.ts`、`src/tool/builtin/*.ts`。
+- 命令系统：`src/commands/CommandRegistry.ts` 与 `src/commands/builtin/*`。
+- 运行态观测：`src/runtime/RuntimeState.ts`，对照 Claude Code `src/bootstrap/state.ts`。
+- 诊断入口：`/diagnostics`，对照 Claude Code `doctor` 与 runtime state，负责把模型、工具、权限、上下文、扩展和角色定制状态聚合成中文可读报告。
+
+后续修改文档或继续开发时，应以以上目录为准；不要恢复旧 `src/agent` 或旧 `ToolExecutionPipeline`，否则会形成两套执行内核。
 ## 一、Async Generator 鱼动整个架构
 
 Agent Loop、工具执行、流式输出，全部通过 `async function*` 串联。`yield` 事件给 UI 层，`return` 终止状态给调用方。

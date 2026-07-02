@@ -39,7 +39,7 @@ const FILE_PATH_PATTERNS: RegExp[] = [
 const GIT_OR_ACTIVITY_PATTERNS: RegExp[] = [
   /\b[0-9a-f]{7,40}\b/i,
   /\b(git log|git blame|recent changes|activity log|who-changed-what|merged PR|merged pull request|PR #\d+|pull request #\d+|commit [0-9a-f]{7,40})\b/i,
-  /(\\u6700\\u8fd1|\\u4eca\\u5929|\\u6628\\u5929).{0,20}(PR|\\u63d0\\u4ea4|\\u5206\\u652f|\\u5408\\u5e76|\\u53d8\\u66f4\\u8bb0\\u5f55|\\u6d3b\\u52a8\\u65e5\\u5fd7)/,
+  /(最近|今天|昨天).{0,20}(PR|提交|分支|合并|变更记录|活动日志)/,
 ];
 
 const EPHEMERAL_PATTERNS: RegExp[] = [

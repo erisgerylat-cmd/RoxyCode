@@ -1,98 +1,103 @@
-/**
- * LLM Provider 接口与相关类型
+﻿/**
+ * LLM Provider 鎺ュ彛涓庣浉鍏崇被鍨?
  *
- * [EXTENSION POINT] 用户可通过实现 LLMProvider 接口接入新的 LLM。
- * 国产模型（Qwen/GLM/DeepSeek）均兼容 OpenAI Chat Completions API。
+ * [EXTENSION POINT] 鐢ㄦ埛鍙€氳繃瀹炵幇 LLMProvider 鎺ュ彛鎺ュ叆鏂扮殑 LLM銆?
+ * 鍥戒骇妯″瀷锛圦wen/GLM/DeepSeek锛夊潎鍏煎 OpenAI Chat Completions API銆?
  */
 
 import type { Message, ToolCall } from './message.js';
 import type { ToolDefinition } from './tool.js';
 
-// ═══════════════════════════════════════════════════════════════
-// LLM 使用量统计
-// ═══════════════════════════════════════════════════════════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+// LLM 浣跨敤閲忕粺璁?
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 
-/** Token 使用量与费用 */
+/** Token 浣跨敤閲忎笌璐圭敤 */
 export interface LLMUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  /** 可选费用（配置了定价才有） */
+  /** 鍙€夎垂鐢紙閰嶇疆浜嗗畾浠锋墠鏈夛級 */
   cost?: number;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// LLM 流式 chunk
-// ═══════════════════════════════════════════════════════════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+// LLM 娴佸紡 chunk
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 
-/** 流式输出的单个 chunk */
+/** 娴佸紡杈撳嚭鐨勫崟涓?chunk */
 export type LLMChunk =
   | { type: 'text'; text: string }
   | { type: 'tool_call_start'; toolCall: ToolCall }
   | { type: 'tool_call_delta'; id: string; argsDelta: string }
   | { type: 'done'; usage: LLMUsage; toolCalls: ToolCall[]; finishReason: string };
 
-// ═══════════════════════════════════════════════════════════════
-// LLM 调用参数
-// ═══════════════════════════════════════════════════════════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+// LLM 璋冪敤鍙傛暟
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 
-/** LLM 调用选项 */
+export type LLMToolChoice = 'auto' | 'none' | { type: 'function'; name: string };
+
+/** LLM 璋冪敤閫夐」 */
 export interface LLMCallOptions {
   messages: Message[];
   tools?: ToolDefinition[];
+  toolChoice?: LLMToolChoice;
   temperature?: number;
   topP?: number;
   maxTokens?: number;
-  /** 支持取消 */
+  /** 鏀寔鍙栨秷 */
   signal?: AbortSignal;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// LLM Provider 接口 [EXTENSION POINT]
-// ═══════════════════════════════════════════════════════════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+// LLM Provider 鎺ュ彛 [EXTENSION POINT]
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 
 /**
- * LLM 提供者接口
+ * LLM 鎻愪緵鑰呮帴鍙?
  *
- * 实现此接口即可接入新的大模型。
- * 参考 engine/llm/BaseLLMProvider.ts 的 OpenAI-compatible 基类。
+ * 瀹炵幇姝ゆ帴鍙ｅ嵆鍙帴鍏ユ柊鐨勫ぇ妯″瀷銆?
+ * 鍙傝€?engine/llm/BaseLLMProvider.ts 鐨?OpenAI-compatible 鍩虹被銆?
  */
 export interface LLMProvider {
-  /** Provider 标识符（如 'qwen', 'deepseek'） */
+  /** Provider 鏍囪瘑绗︼紙濡?'qwen', 'deepseek'锛?*/
   readonly id: string;
 
-  /** 显示名称 */
+  /** 鏄剧ず鍚嶇О */
   readonly name: string;
 
-  /** 支持的最大上下文窗口（token 数） */
+  /** 鏀寔鐨勬渶澶т笂涓嬫枃绐楀彛锛坱oken 鏁帮級 */
   readonly maxContextTokens: number;
 
-  /** 是否支持工具调用（Function Calling） */
+  /** 鏄惁鏀寔宸ュ叿璋冪敤锛團unction Calling锛?*/
   readonly supportsTools: boolean;
 
-  /** 流式对话调用 — 返回 AsyncIterable chunk 流 */
+  /** 娴佸紡瀵硅瘽璋冪敤 鈥?杩斿洖 AsyncIterable chunk 娴?*/
   chatStream(options: LLMCallOptions): AsyncIterable<LLMChunk>;
 
-  /** 非流式单次调用（Lite 模式用） */
+  /** 闈炴祦寮忓崟娆¤皟鐢紙Lite 妯″紡鐢級 */
   chat(options: LLMCallOptions): Promise<{ text: string; usage: LLMUsage }>;
 
-  /** 估算 token 数量（用于上下文管理） */
+  /** 浼扮畻 token 鏁伴噺锛堢敤浜庝笂涓嬫枃绠＄悊锛?*/
   countTokens(text: string): Promise<number>;
 
-  /** 检查 API Key 是否有效（启动时调用） */
+  /** 妫€鏌?API Key 鏄惁鏈夋晥锛堝惎鍔ㄦ椂璋冪敤锛?*/
   validate(): Promise<boolean>;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// LLM Provider 配置
-// ═══════════════════════════════════════════════════════════════
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+// LLM Provider 閰嶇疆
+// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 
-/** LLM Provider 实例化配置 */
+/** LLM Provider 瀹炰緥鍖栭厤缃?*/
 export interface LLMProviderConfig {
   apiKey: string;
   baseUrl?: string;
   model: string;
+  fallbackModels?: string[];
   temperature?: number;
   topP?: number;
   maxTokens?: number;
 }
+

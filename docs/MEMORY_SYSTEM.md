@@ -165,3 +165,30 @@ Memory 不是当前任务计划，也不是代码索引。
 - 增加 `/memory edit` 或 `/memory update`：允许用户修订旧记忆，而不是只能归档再添加
 - 增加角色化记忆视图：同一条学习/工作流记忆可以根据 Roxy、Eris、Nanahoshi 等角色呈现不同解释风格
 - 增加团队/项目共享记忆：在 `.roxycode/memory.jsonl` 基础上扩展团队同步，但必须保留路径安全校验
+
+## 2026-06-29 优化：Selective Recall 与记忆年龄提示
+
+本次根据文档中的后续增强项，补齐了 Memory 的查询时选择性召回和 per-memory age/staleness note。
+
+实现位置：
+
+- `src/session/memory/MemoryRecall.ts`：新增本地确定性召回器，按当前用户 query、tags、content、memory type hint、scope、source、更新时间综合打分。
+- `src/engine/agent/RuntimeContext.ts`：从原来的最近 24 条 memory 改为先读取候选，再根据当前用户输入选择最多 5 条注入 Agent RuntimeContext。
+- `src/session/memory/MemoryStore.ts`：prompt 渲染每条 memory 时追加更新时间，例如“今天 / 昨天 / N 天前”；超过 1 天的记忆会带旧快照提醒。
+- `src/engine/agent/AgentLoop.ts`：调用 `loadRuntimeContext` 时传入当前 `userInput`，让召回器能按任务选择记忆。
+
+对照 Claude Code：
+
+- Claude Code `findRelevantMemories.ts` 使用一个轻量 side query 让模型从 memory manifest 中选择最多 5 条相关记忆，优势是语义判断更强。
+- Claude Code `memoryAge.ts` 把 mtime 转成 “today / yesterday / N days ago”，并对旧记忆生成 staleness caveat，避免模型把旧快照当成当前事实。
+
+RoxyCode 当前选择：
+
+- 先实现本地确定性 selector，不额外消耗模型 token，不依赖网络，适合中文用户和国产模型不稳定时的基础体验。
+- 召回结果更可预测，也便于后续给 `/memory recall <query>` 做可解释展示。
+- 缺点是语义能力弱于 Claude Code 的 LLM selector。后续可以在 `MemoryRecall.ts` 上增加可选 LLM rerank：本地召回先筛 20 条，再让模型选 3-5 条。
+
+产品化意义：
+
+- RoxyCode 不再把所有长期记忆塞进上下文，而是让“每个人自己的 Claude Code”只带当前任务真正需要的个人偏好、学习方式和工作流习惯。
+- 旧记忆会显式提醒“这是旧快照”，更适合教学型、中文业务开发和长期个性化使用，减少模型根据过期信息误导用户。

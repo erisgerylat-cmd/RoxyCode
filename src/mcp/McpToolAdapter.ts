@@ -1,6 +1,6 @@
 import type { Tool, ToolDefinition, ToolParameterProperty, ToolParameterSchema } from '../tool/types.js';
 import { formatToolResult } from '../tool/executor/ToolExecutor.js';
-import type { McpServerDefinition, McpToolDefinition } from './types.js';
+import type { McpServerDefinition, McpToolAnnotations, McpToolDefinition } from './types.js';
 import { McpStdioClient } from './McpStdioClient.js';
 
 export class McpToolAdapter {
@@ -42,14 +42,22 @@ export class McpToolAdapter {
 
   private toRoxyTool(server: McpServerDefinition, mcpTool: McpToolDefinition): Tool {
     const getClient = () => this.getClient(server);
+    const readOnly = mcpTool.annotations?.readOnlyHint === true;
+    const destructive = mcpTool.annotations?.destructiveHint === true;
+    const openWorld = mcpTool.annotations?.openWorldHint === true;
     return {
       definition: {
         name: mcpTool.roxyName,
         description: `[MCP:${server.name}] ${mcpTool.description}`,
         parameters: mcpTool.inputSchema,
       },
-      isReadOnly: false,
-      riskLevel: 'medium',
+      isReadOnly: readOnly,
+      riskLevel: destructive ? 'high' : readOnly ? 'low' : 'medium',
+      concurrency: readOnly ? 'safe' : 'exclusive',
+      interruptBehavior: readOnly ? 'cancel' : 'block',
+      isConcurrencySafe() {
+        return readOnly;
+      },
       getPermissionPrompt(args, ctx) {
         const zh = ctx.language !== 'en-US';
         return {
@@ -62,7 +70,7 @@ export class McpToolAdapter {
             `tool: ${mcpTool.originalName}`,
             `args: ${JSON.stringify(args)}`,
           ],
-          riskLevel: 'medium',
+          riskLevel: destructive ? 'high' : readOnly ? 'low' : 'medium',
         };
       },
       async execute(args, ctx) {
@@ -72,14 +80,14 @@ export class McpToolAdapter {
         const body = renderMcpResult(server.name, mcpTool.originalName, rawResult, ctx.language !== 'en-US');
         return {
           success,
-          output: formatToolResult(mcpTool.roxyName, success, body, ctx, { server: server.name, mcpTool: mcpTool.originalName }),
+          output: formatToolResult(mcpTool.roxyName, success, body, ctx, { server: server.name, mcpTool: mcpTool.originalName, readOnly, destructive, openWorld }),
           error: success ? undefined : 'MCP tool returned an error.',
           duration: Date.now() - started,
-          metadata: { server: server.name, mcpTool: mcpTool.originalName },
+          metadata: { server: server.name, mcpTool: mcpTool.originalName, readOnly, destructive, openWorld },
         };
       },
       getAuditSummary(args, result) {
-        return { operation: 'mcp_tool_call', server: server.name, tool: mcpTool.originalName, success: result?.success, args };
+        return { operation: 'mcp_tool_call', server: server.name, tool: mcpTool.originalName, success: result?.success, readOnly, destructive, openWorld, args };
       },
     };
   }
@@ -94,7 +102,18 @@ function normalizeMcpTool(serverName: string, raw: unknown): McpToolDefinition |
     roxyName: `mcp__${sanitizeName(serverName)}__${sanitizeName(originalName)}`,
     description: typeof raw.description === 'string' ? raw.description : `MCP tool ${originalName}`,
     inputSchema: normalizeInputSchema(raw.inputSchema),
+    annotations: normalizeAnnotations(raw.annotations),
   };
+}
+
+function normalizeAnnotations(value: unknown): McpToolAnnotations | undefined {
+  if (!isRecord(value)) return undefined;
+  const annotations: McpToolAnnotations = {};
+  if (typeof value.title === 'string') annotations.title = value.title;
+  if (typeof value.readOnlyHint === 'boolean') annotations.readOnlyHint = value.readOnlyHint;
+  if (typeof value.destructiveHint === 'boolean') annotations.destructiveHint = value.destructiveHint;
+  if (typeof value.openWorldHint === 'boolean') annotations.openWorldHint = value.openWorldHint;
+  return Object.keys(annotations).length > 0 ? annotations : undefined;
 }
 
 function normalizeInputSchema(value: unknown): ToolParameterSchema {

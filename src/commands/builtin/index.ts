@@ -1,4 +1,6 @@
 import chalk from 'chalk';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import type { CharacterManager } from '../../aesthetic/character/CharacterManager.js';
 import type { ConfigManager, ConfigScope } from '../../core/ConfigManager.js';
 import { APP_VERSION } from '../../core/constants.js';
@@ -22,6 +24,11 @@ import { handleMemoryCommand } from './memory.js';
 import { handleWorkflowCommand } from './workflow.js';
 import { handleHooksCommand, handleMcpCommand, handlePluginCommand } from './extensions.js';
 import { handleAgentsCommand } from './agents.js';
+import { renderDiagnosticsCommand } from './diagnostics.js';
+import { formatQueryProfile, type RuntimeStateSnapshot } from '../../runtime/index.js';
+import { redactConfigValue } from '../../core/configSchema.js';
+import type { MemoryStats } from '../../session/memory/index.js';
+import type { Tool } from '../../tool/index.js';
 
 export interface BuiltinCommandFactoryOptions {
   text: I18nText['commands'];
@@ -40,6 +47,9 @@ export interface BuiltinCommandFactoryOptions {
   getSessionElapsedMs: () => number;
   getHistoryCount: () => number;
   getCommandCount: () => number;
+  getTools?: () => Tool[];
+  getRuntimeSnapshot?: () => RuntimeStateSnapshot;
+  getMemoryStats?: () => Promise<MemoryStats>;
   showHelp: () => void;
   showCommandHelp: (cmdName: string) => void;
   showHistory: () => void;
@@ -115,10 +125,11 @@ export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): Co
       category: 'context',
       source: 'builtin',
       type: 'local',
-      usage: '/memory [list|types|policy|paths|add|forget|auto]',
-      examples: ['/memory', '/memory types', '/memory policy', '/memory auto off', '/memory add learning explain TypeScript with examples', '/memory add workflow --scope project run pnpm build before final'],
+      usage: '/memory [list|stats|types|policy|paths|add|forget|auto]',
+      examples: ['/memory', '/memory stats', '/memory types', '/memory policy', '/memory auto off', '/memory add learning explain TypeScript with examples', '/memory add workflow --scope project run pnpm build before final'],
       subcommands: [
         { name: 'list', description: isZh ? zh('memoryList') : 'List memories' },
+        { name: 'stats', description: isZh ? zh('memoryStats') : 'Show memory statistics' },
         { name: 'add', description: isZh ? zh('memoryAdd') : 'Add a memory', needsInput: true },
         { name: 'forget', description: isZh ? zh('memoryForget') : 'Archive a memory', needsInput: true },
         { name: 'types', description: isZh ? zh('memoryTypes') : 'Show memory types' },
@@ -199,7 +210,8 @@ export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): Co
         { name: 'paths', description: isZh ? zh('extensionPaths') : 'Show plugin search paths' },
       ],
       handler: args => handlePluginCommand(args, { configManager: options.configManager, runAgentPrompt: options.runAgentPrompt }),
-    },    {
+    },
+    {
       name: 'resume',
       description: isZh ? zh('resumeDescription') : 'Resume the latest session or search by id/text',
       aliases: ['continue'],
@@ -306,6 +318,31 @@ export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): Co
       usage: '/status',
       examples: ['/status'],
       handler: async () => renderStatusCommand(options),
+    },
+    {
+      name: 'perf',
+      description: isZh ? '\u67e5\u770b Query Pipeline \u6027\u80fd\u5256\u6790' : 'Show query pipeline profiling details',
+      aliases: ['prof'],
+      category: 'dev',
+      source: 'builtin',
+      type: 'local',
+      usage: '/perf query',
+      examples: ['/perf query'],
+      subcommands: [
+        { name: 'query', description: isZh ? '\u67e5\u770b\u6700\u8fd1\u4e00\u6b21\u81ea\u7136\u8bed\u8a00\u4efb\u52a1\u7684\u6d41\u6c34\u7ebf\u8017\u65f6' : 'Show the latest natural-language query profile' },
+      ],
+      handler: args => renderPerfCommand(args, options),
+    },
+    {
+      name: 'diagnostics',
+      description: isZh ? zh('diagnosticsDescription') : 'Run a Claude Code style runtime diagnostic report',
+      aliases: ['doctor', 'diag'],
+      category: 'dev',
+      source: 'builtin',
+      type: 'local',
+      usage: '/diagnostics',
+      examples: ['/diagnostics', '/doctor'],
+      handler: async () => renderDiagnosticsCommand(options),
     },
     {
       name: 'optimize',
@@ -448,11 +485,15 @@ export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): Co
       source: 'builtin',
       type: 'local',
       usage: text.config.usage,
-      examples: ['/config', '/config paths', '/config get ui.language', '/config set character.current roxy --scope project'],
+      examples: ['/config', '/config sources', '/config validate', '/config get ui.language --source', '/config set character.current roxy --scope project'],
       subcommands: [
         { name: 'get', description: isZh ? zh('readConfig') : 'Read a config value', needsInput: true },
         { name: 'set', description: isZh ? zh('writeConfig') : 'Write a config value', needsInput: true },
         { name: 'paths', description: isZh ? zh('configPaths') : 'Show config file paths' },
+        { name: 'sources', description: isZh ? '\u663e\u793a\u914d\u7f6e\u6765\u6e90' : 'Show config sources' },
+        { name: 'validate', description: isZh ? '\u6821\u9a8c\u914d\u7f6e\u6587\u4ef6' : 'Validate configuration' },
+        { name: 'reload', description: isZh ? '\u91cd\u65b0\u52a0\u8f7d\u914d\u7f6e' : 'Reload configuration' },
+        { name: 'export', description: isZh ? '\u5bfc\u51fa\u8131\u654f\u540e\u7684\u751f\u6548\u914d\u7f6e' : 'Export redacted effective configuration' },
       ],
       handler: args => handleConfigCommand(args, options),
     },
@@ -605,13 +646,38 @@ function renderModelCommand(options: BuiltinCommandFactoryOptions): void {
   console.log('');
 }
 
+function renderPerfCommand(args: string[], options: BuiltinCommandFactoryOptions): void {
+  const isZh = options.language === 'zh-CN';
+  const action = (args[0] ?? 'query').toLowerCase();
+  if (action !== 'query') {
+    console.log(chalk.dim('  ' + (isZh ? '\u7528\u6cd5' : 'Usage') + ': /perf query'));
+    return;
+  }
+
+  const profile = options.getRuntimeSnapshot?.().operations.queryProfiles.last;
+  console.log('');
+  if (!profile) {
+    console.log(chalk.yellow('  ' + (isZh ? '\u8fd8\u6ca1\u6709 Query Pipeline \u8bb0\u5f55' : 'No query pipeline profile recorded yet.')));
+    console.log(chalk.dim('  ' + (isZh ? '\u5148\u53d1\u9001\u4e00\u6b21\u81ea\u7136\u8bed\u8a00\u7f16\u7a0b\u4efb\u52a1\uff0c\u7136\u540e\u518d\u8fd0\u884c /perf query\u3002' : 'Send a natural-language coding request first, then run /perf query.')));
+    console.log('');
+    return;
+  }
+
+  for (const line of formatQueryProfile(profile, options.language)) {
+    console.log(line.startsWith('  ') ? chalk.dim(line) : '  ' + line);
+  }
+  console.log(chalk.dim('  ' + (isZh ? '\u5bf9\u7167 Claude Code' : 'Claude Code reference') + ': queryProfiler checkpoints and phase breakdown.'));
+  console.log('');
+}
 async function renderStatusCommand(options: BuiltinCommandFactoryOptions): Promise<void> {
   const text = options.text;
+  const isZh = options.language === 'zh-CN';
   const character = options.characterManager.getCurrentCharacter();
-  const model = (options.configManager.get('llm.model') as string) || text.model.auto;
+  const runtime = options.getRuntimeSnapshot?.();
+  const model = runtime?.model || (options.configManager.get('llm.model') as string) || text.model.auto;
   const configuredMode = ((options.configManager.get('mode') as string) || 'auto').toLowerCase();
   const modeSpec = getAgentModeSpec(normalizeAgentMode(configuredMode));
-  const elapsed = formatElapsed(options.getSessionElapsedMs());
+  const elapsed = runtime ? formatElapsed(Date.now() - runtime.startedAt) : formatElapsed(options.getSessionElapsedMs());
   const ctxStatus = await options.contextManager.getStatus([]);
   const ctxPercent = (ctxStatus.usageRatio * 100).toFixed(1);
   console.log('');
@@ -624,23 +690,76 @@ async function renderStatusCommand(options: BuiltinCommandFactoryOptions): Promi
   if (character.companion) {
     console.log(`  Companion: ${character.companion.name} (${character.companion.kind})`);
   }
-  console.log(`  ${options.language === 'zh-CN' ? zh('modeConfigured') : 'Mode'}: ${configuredMode} (${modeSpec.label})`);
+  console.log(`  ${isZh ? zh('modeConfigured') : 'Mode'}: ${configuredMode} (${modeSpec.label})`);
   console.log(chalk.dim(`  ${modeSpec.description}`));
   console.log(`  ${text.status.model}: ${options.llmProvider.name} / ${model}`);
   console.log(`  ${text.status.elapsed}: ${elapsed}`);
-  console.log(`  ${text.status.turns}: ${options.getConversationTurns()}`);
+  console.log(`  ${text.status.turns}: ${runtime?.session.turns ?? options.getConversationTurns()}`);
   console.log(`  ${text.status.contextUsage}: ${ctxStatus.currentTokens.toLocaleString()} / ${ctxStatus.maxContextTokens.toLocaleString()} (${ctxPercent}%)`);
   console.log(`  ${text.status.autoCompression}: ${ctxStatus.compressionEnabled ? text.status.enabled : text.status.disabled}`);
-  console.log(`  ${text.status.commandCount}: ${options.getCommandCount()}`);
+  console.log(`  ${text.status.commandCount}: ${runtime?.extensions.commands.total ?? options.getCommandCount()}`);
   console.log(`  ${text.status.historyCount}: ${options.getHistoryCount()} ${text.status.items}`);
-  const session = options.getSessionInfo?.();
+
+  const session = runtime ? { sessionId: runtime.session.sessionId, path: runtime.session.transcriptPath } : options.getSessionInfo?.();
   if (session) {
     console.log(`  Session: ${session.sessionId}`);
+    if (runtime) console.log(`  ${isZh ? '\u4f1a\u8bdd\u6d88\u606f' : 'Session messages'}: ${runtime.session.messageCount}`);
     console.log(chalk.dim(`  Transcript: ${session.path}`));
+  }
+
+  if (runtime) {
+    const agentState = runtime.agent.active ? (isZh ? '\u8fd0\u884c\u4e2d' : 'active') : (isZh ? '\u7a7a\u95f2' : 'idle');
+    const extensionErrors = runtime.extensions.plugins.errors.length + runtime.extensions.hooks.errors.length + runtime.extensions.mcp.errors.length;
+    const usage = runtime.usage.total;
+    console.log(chalk.dim(`  ${isZh ? '\u8fd0\u884c\u6001' : 'Runtime'}: ${runtime.runtimeId.slice(0, 8)} / ${runtime.isInteractive ? (isZh ? '\u4ea4\u4e92\u5f0f' : 'interactive') : (isZh ? '\u975e\u4ea4\u4e92\u5f0f' : 'non-interactive')}`));
+    console.log(chalk.dim(`  ${isZh ? '\u5de5\u4f5c\u533a' : 'Workspace'}: ${runtime.projectRoot}`));
+    console.log(chalk.dim(`  ${isZh ? '\u6700\u8fd1\u4ea4\u4e92' : 'Last interaction'}: ${formatElapsed(Date.now() - runtime.lastInteractionAt)} ${isZh ? '\u524d' : 'ago'}`));
+    console.log(`  Agent: ${agentState} / ${runtime.agent.mode}`);
+    console.log(`  ${isZh ? '\u4e0a\u4e0b\u6587\u538b\u7f29' : 'Context compactions'}: ${runtime.agent.contextCompactions}`);
+    console.log(`  ${isZh ? 'Token \u9884\u7b97\u7eed\u5199' : 'Token budget continuations'}: ${runtime.agent.tokenBudgetContinuations}`);
+    if (runtime.agent.lastError) console.log(chalk.red(`  ${isZh ? '\u6700\u8fd1\u9519\u8bef' : 'Last error'}: ${runtime.agent.lastError}`));
+    console.log(`  ${isZh ? '\u6269\u5c55' : 'Extensions'}: plugins ${runtime.extensions.plugins.enabled}/${runtime.extensions.plugins.disabled}, hooks ${runtime.extensions.hooks.count}, MCP ${runtime.extensions.mcp.servers} servers / ${runtime.extensions.mcp.tools} tools`);
+    console.log(`  ${isZh ? '\u5de5\u5177' : 'Tools'}: builtin ${runtime.extensions.tools.builtin}, MCP ${runtime.extensions.tools.mcp}, total ${runtime.extensions.tools.total}`);
+    console.log(`  ${isZh ? '\u5de5\u5177\u8c03\u7528' : 'Tool calls'}: ${runtime.operations.tools.totalCalls} total / ${runtime.operations.tools.failedCalls} failed / ${formatElapsed(runtime.operations.tools.totalDurationMs)} total`);
+    if (runtime.operations.tools.turnCalls > 0) console.log(chalk.dim(`  ${isZh ? '\u672c\u8f6e\u5de5\u5177' : 'Turn tools'}: ${runtime.operations.tools.turnCalls} calls / ${formatElapsed(runtime.operations.tools.turnDurationMs)}`));
+    if (runtime.operations.tools.last) console.log(chalk.dim(`  ${isZh ? '\u6700\u8fd1\u5de5\u5177' : 'Last tool'}: ${runtime.operations.tools.last.name} ${runtime.operations.tools.last.success ? 'OK' : 'ERR'} / ${formatElapsed(runtime.operations.tools.last.durationMs)}`));
+    console.log(`  Hooks: ${runtime.operations.hooks.totalRuns} runs / ${runtime.operations.hooks.blockedRuns} blocked / ${runtime.operations.hooks.errorRuns} error / ${formatElapsed(runtime.operations.hooks.totalDurationMs)} total`);
+    if (runtime.operations.hooks.turnRuns > 0) console.log(chalk.dim(`  ${isZh ? '\u672c\u8f6e Hooks' : 'Turn hooks'}: ${runtime.operations.hooks.turnRuns} runs / ${formatElapsed(runtime.operations.hooks.turnDurationMs)}`));
+    if (runtime.operations.slowOperations.length > 0) {
+      const slow = runtime.operations.slowOperations.at(-1)!;
+      console.log(chalk.yellow(`  ${isZh ? '\u6162\u64cd\u4f5c' : 'Slow operation'}: ${slow.kind}:${slow.operation} / ${formatElapsed(slow.durationMs)}`));
+    }
+    if (runtime.operations.recentErrors.length > 0) {
+      const last = runtime.operations.recentErrors.at(-1)!;
+      console.log(chalk.red(`  ${isZh ? '\u6700\u8fd1\u8fd0\u884c\u9519\u8bef' : 'Recent runtime error'}: ${last.source} - ${last.message}`));
+    }
+    console.log(`  ${isZh ? 'Token \u7528\u91cf' : 'Token usage'}: requests=${runtime.usage.requests} input=${usage.inputTokens.toLocaleString()} output=${usage.outputTokens.toLocaleString()} total=${usage.totalTokens.toLocaleString()}`);
+    if (options.getMemoryStats) {
+      const memory = await options.getMemoryStats();
+      const enabled = memory.enabled ? (isZh ? '\u5f00\u542f' : 'on') : (isZh ? '\u5173\u95ed' : 'off');
+      const typeSummary = Object.entries(memory.byType)
+        .filter(([, count]) => count > 0)
+        .map(([type, count]) => `${type}=${count}`)
+        .join(', ');
+      console.log(`  ${isZh ? '\u8bb0\u5fc6' : 'Memory'}: ${enabled} / total=${memory.total} / global=${memory.global} / project=${memory.project} / manual=${memory.manual} / auto=${memory.auto}`);
+      if (typeSummary) console.log(chalk.dim(`  ${isZh ? '\u8bb0\u5fc6\u7c7b\u578b' : 'Memory types'}: ${typeSummary}`));
+      if (memory.latestAge) console.log(chalk.dim(`  ${isZh ? '\u6700\u8fd1\u8bb0\u5fc6' : 'Latest memory'}: ${memory.latestAge}`));
+    }
+    if (runtime.operations.queryProfiles.last) {
+      const profile = runtime.operations.queryProfiles.last;
+      const ttft = profile.firstTokenMs !== undefined ? ' / TTFT=' + profile.firstTokenMs + 'ms' : '';
+      const slowest = profile.slowestPhase ? ' / slowest=' + profile.slowestPhase.name + ':' + profile.slowestPhase.durationMs + 'ms' : '';
+      console.log('  ' + (isZh ? '\u6700\u8fd1 Query' : 'Last query') + ': total=' + profile.totalMs + 'ms' + ttft + slowest);
+    }
+    if (runtime.telemetry) {
+      console.log(`  Telemetry: ${runtime.telemetry.enabled ? 'on' : 'off'} / events=${runtime.telemetry.eventCount} / dropped=${runtime.telemetry.droppedEvents}`);
+      console.log(chalk.dim(`  Telemetry file: ${runtime.telemetry.path}`));
+      if (runtime.telemetry.lastError) console.log(chalk.yellow(`  Telemetry warning: ${runtime.telemetry.lastError}`));
+    }
+    if (extensionErrors > 0) console.log(chalk.yellow(`  ${isZh ? '\u6269\u5c55\u52a0\u8f7d\u8b66\u544a' : 'Extension warnings'}: ${extensionErrors}`));
   }
   console.log('');
 }
-
 async function handleLanguageCommand(args: string[], options: BuiltinCommandFactoryOptions): Promise<void> {
   const text = options.text;
   const arg = args[0]?.toLowerCase();
@@ -668,34 +787,78 @@ async function handleLanguageCommand(args: string[], options: BuiltinCommandFact
 async function handleConfigCommand(args: string[], options: BuiltinCommandFactoryOptions): Promise<void> {
   const configText = options.text.config;
   const action = args[0]?.toLowerCase();
+  const isZh = options.language === 'zh-CN';
+
   if (!action) {
     const snapshot = options.configManager.snapshot();
     const paths = options.configManager.getPaths();
+    const validation = options.configManager.validate();
     console.log('');
     console.log(chalk.bold(`  ${configText.title}`));
-    console.log(`  ui.language:        ${snapshot.ui.language}`);
-    console.log(`  ui.aestheticMode:   ${snapshot.ui.aestheticMode}`);
-    console.log(`  character.current:  ${snapshot.character.current}`);
-    console.log(`  llm.provider:       ${snapshot.llm.provider}`);
-    console.log(`  llm.model:          ${snapshot.llm.model}`);
+    renderConfigLine(options, 'ui.language', snapshot.ui.language);
+    renderConfigLine(options, 'ui.aestheticMode', snapshot.ui.aestheticMode);
+    renderConfigLine(options, 'character.current', snapshot.character.current);
+    renderConfigLine(options, 'llm.provider', snapshot.llm.provider);
+    renderConfigLine(options, 'llm.model', snapshot.llm.model);
+    renderConfigLine(options, 'mode', snapshot.mode);
+    console.log(chalk.dim(`  ${configLabel(isZh, 'precedence')}: default < global < project < env < session`));
     console.log(chalk.dim(`  ${configText.global}:  ${paths.global}`));
     console.log(chalk.dim(`  ${configText.project}: ${paths.project}`));
+    if (!validation.ok || validation.issues.length > 0) {
+      const errors = validation.issues.filter(issue => issue.severity === 'error').length;
+      const warnings = validation.issues.filter(issue => issue.severity === 'warning').length;
+      console.log(chalk.yellow(`  ${configLabel(isZh, 'validation')}: ${errors} errors / ${warnings} warnings`));
+      console.log(chalk.dim(`  ${configLabel(isZh, 'validateHint')}`));
+    }
     console.log(chalk.dim(`  ${configText.examples}`));
     console.log('');
     return;
   }
+
   if (action === 'paths') {
     const paths = options.configManager.getPaths();
     console.log(`  ${configText.global}:  ${paths.global}`);
     console.log(`  ${configText.project}: ${paths.project}`);
+    console.log(chalk.dim('  env: ROXY_* / OPENAI_* / DASHSCOPE_* / DEEPSEEK_* / GLM_*'));
+    console.log(chalk.dim(`  session: ${configLabel(isZh, 'sessionScope')}`));
     return;
   }
+
+  if (action === 'sources') {
+    renderConfigSources(options);
+    return;
+  }
+
+  if (action === 'validate') {
+    renderConfigValidation(options);
+    return;
+  }
+
+  if (action === 'reload') {
+    await options.configManager.reload();
+    options.reloadCommands();
+    console.log(chalk.green(`  ${configLabel(isZh, 'reloaded')}`));
+    renderConfigValidation(options, { compact: true });
+    return;
+  }
+
+  if (action === 'export') {
+    await exportConfig(args.slice(1), options);
+    return;
+  }
+
   if (action === 'get') {
     const path = args[1];
     if (!path) { console.log(chalk.red(`  ${configText.missingPath}`)); return; }
-    console.log(`  ${path}: ${formatConfigValue(options.configManager.get(path))}`);
+    const value = redactConfigValue(path, options.configManager.get(path));
+    console.log(`  ${path}: ${formatConfigValue(value)}`);
+    if (args.includes('--source') || args.includes('-s')) {
+      const source = options.configManager.getSource(path);
+      console.log(chalk.dim(`  ${configLabel(isZh, 'source')}: ${source ? formatConfigSource(source) : 'unknown'}`));
+    }
     return;
   }
+
   if (action === 'set') {
     const parsed = parseConfigSetArgs(args.slice(1));
     if (!parsed.ok) {
@@ -718,16 +881,148 @@ async function handleConfigCommand(args: string[], options: BuiltinCommandFactor
       }
       value = normalizeLanguage(raw);
     }
-    await options.configManager.set(parsed.path, value, { scope: parsed.scope });
+    try {
+      await options.configManager.set(parsed.path, value, { scope: parsed.scope });
+    } catch (err) {
+      console.log(chalk.red(`  ${configLabel(isZh, 'notSaved')}: ${err instanceof Error ? err.message : String(err)}`));
+      return;
+    }
     if (parsed.path === 'ui.language') options.reloadCommands();
     console.log(chalk.green(`  ${configText.saved}: ${parsed.path}`));
     console.log(chalk.dim(`  ${configText.scope}: ${parsed.scope}`));
-    console.log(chalk.dim(`  ${configText.value}: ${formatConfigValue(options.configManager.get(parsed.path))}`));
+    console.log(chalk.dim(`  ${configLabel(isZh, 'source')}: ${formatConfigSource(options.configManager.getSource(parsed.path))}`));
+    console.log(chalk.dim(`  ${configText.value}: ${formatConfigValue(redactConfigValue(parsed.path, options.configManager.get(parsed.path)))}`));
     return;
   }
+
   console.log(chalk.red(`  ${configText.invalidUsage}: /config ${action}`));
 }
 
+function renderConfigLine(options: BuiltinCommandFactoryOptions, path: string, value: unknown): void {
+  const source = options.configManager.getSource(path);
+  const sourceLabel = source ? ` [${source.source}${source.env ? `:${source.env}` : ''}]` : '';
+  console.log(`  ${path.padEnd(20)} ${formatConfigValue(redactConfigValue(path, value))}${chalk.dim(sourceLabel)}`);
+}
+
+function renderConfigSources(options: BuiltinCommandFactoryOptions): void {
+  const isZh = options.language === 'zh-CN';
+  const snapshot = options.configManager.getSources();
+  console.log('');
+  console.log(chalk.bold(`  ${configLabel(isZh, 'sources')}`));
+  console.log(chalk.dim(`  ${configLabel(isZh, 'precedence')}: ${snapshot.precedence.join(' < ')}`));
+  console.log(chalk.dim(`  ${configLabel(isZh, 'claudeReference')}: user/project/local/flag/policy source tracking.`));
+  console.log('');
+  for (const entry of snapshot.entries) {
+    const detail = [entry.file, entry.env].filter(Boolean).join(' / ');
+    const suffix = detail ? ` - ${detail}` : '';
+    console.log(`  ${entry.path.padEnd(42)} ${entry.source}${chalk.dim(suffix)}`);
+  }
+  if (snapshot.issues.length > 0) {
+    console.log('');
+    console.log(chalk.yellow(`  ${configLabel(isZh, 'loadIssues')}: ${snapshot.issues.length}`));
+    for (const issue of snapshot.issues.slice(0, 8)) renderConfigIssue(issue);
+  }
+  console.log('');
+}
+
+function renderConfigValidation(options: BuiltinCommandFactoryOptions, options2: { compact?: boolean } = {}): void {
+  const isZh = options.language === 'zh-CN';
+  const result = options.configManager.validate();
+  const errors = result.issues.filter(issue => issue.severity === 'error').length;
+  const warnings = result.issues.filter(issue => issue.severity === 'warning').length;
+  if (!options2.compact) {
+    console.log('');
+    console.log(chalk.bold(`  ${configLabel(isZh, 'validation')}`));
+    console.log(chalk.dim(`  ${configLabel(isZh, 'claudeReference')}: parse settings and keep structured validation errors.`));
+  }
+  if (result.ok && warnings === 0) {
+    console.log(chalk.green(`  ${configLabel(isZh, 'valid')}`));
+    if (!options2.compact) console.log('');
+    return;
+  }
+  console.log(`${errors > 0 ? chalk.red('  [FAIL]') : chalk.yellow('  [WARN]')} ${errors} errors / ${warnings} warnings`);
+  for (const issue of result.issues.slice(0, options2.compact ? 5 : 30)) renderConfigIssue(issue);
+  if (result.issues.length > (options2.compact ? 5 : 30)) {
+    console.log(chalk.dim(`  ... ${result.issues.length - (options2.compact ? 5 : 30)} more`));
+  }
+  if (!options2.compact) console.log('');
+}
+
+function renderConfigIssue(issue: { severity: 'error' | 'warning'; path: string; message: string; source?: string; file?: string; env?: string; expected?: string; actual?: string }): void {
+  const label = issue.severity === 'error' ? chalk.red('[ERR]') : chalk.yellow('[WARN]');
+  const where = [issue.source, issue.file, issue.env].filter(Boolean).join(' / ');
+  const path = issue.path || '<root>';
+  console.log(`  ${label} ${path}: ${issue.message}`);
+  if (where) console.log(chalk.dim(`        ${where}`));
+  if (issue.expected || issue.actual) console.log(chalk.dim(`        expected=${issue.expected ?? '-'} actual=${issue.actual ?? '-'}`));
+}
+
+async function exportConfig(args: string[], options: BuiltinCommandFactoryOptions): Promise<void> {
+  const isZh = options.language === 'zh-CN';
+  const target = args.find(arg => !arg.startsWith('--'));
+  const json = `${JSON.stringify(options.configManager.exportEffectiveConfig(), null, 2)}\n`;
+  if (!target) {
+    console.log(json.trimEnd());
+    return;
+  }
+
+  const outputPath = isAbsolute(target) ? target : resolve(process.cwd(), target);
+  if (!isInsideWorkspace(outputPath)) {
+    console.log(chalk.red(`  ${configLabel(isZh, 'exportInsideWorkspace')}`));
+    return;
+  }
+
+  await mkdir(dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, json, 'utf-8');
+  console.log(chalk.green(`  ${configLabel(isZh, 'exported')}: ${outputPath}`));
+}
+
+function isInsideWorkspace(path: string): boolean {
+  const rel = relative(process.cwd(), path);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function formatConfigSource(source: ReturnType<ConfigManager['getSource']>): string {
+  if (!source) return 'unknown';
+  const detail = [source.file, source.env].filter(Boolean).join(' / ');
+  return detail ? `${source.source} (${detail})` : source.source;
+}
+
+type ConfigLabelKey =
+  | 'precedence'
+  | 'validation'
+  | 'validateHint'
+  | 'sessionScope'
+  | 'reloaded'
+  | 'source'
+  | 'notSaved'
+  | 'sources'
+  | 'claudeReference'
+  | 'loadIssues'
+  | 'valid'
+  | 'exportInsideWorkspace'
+  | 'exported';
+
+const CONFIG_LABELS: Record<ConfigLabelKey, { zh: string; en: string }> = {
+  precedence: { zh: '\u4f18\u5148\u7ea7', en: 'Precedence' },
+  validation: { zh: '\u914d\u7f6e\u6821\u9a8c', en: 'Config validation' },
+  validateHint: { zh: '\u8fd0\u884c /config validate \u67e5\u770b\u8be6\u60c5\u3002', en: 'Run /config validate for details.' },
+  sessionScope: { zh: '\u5f53\u524d\u8fdb\u7a0b\u5185\u8986\u76d6\uff0c\u9884\u7559\u7ed9\u540e\u7eed\u4ea4\u4e92\u5f0f\u8bbe\u7f6e\u3002', en: 'Current process overrides, reserved for future interactive settings.' },
+  reloaded: { zh: '\u914d\u7f6e\u5df2\u91cd\u65b0\u52a0\u8f7d\u3002', en: 'Configuration reloaded.' },
+  source: { zh: '\u6765\u6e90', en: 'Source' },
+  notSaved: { zh: '\u914d\u7f6e\u672a\u4fdd\u5b58', en: 'Config not saved' },
+  sources: { zh: '\u914d\u7f6e\u6765\u6e90', en: 'Config sources' },
+  claudeReference: { zh: '\u5bf9\u7167 Claude Code', en: 'Claude Code reference' },
+  loadIssues: { zh: '\u52a0\u8f7d\u95ee\u9898', en: 'Load issues' },
+  valid: { zh: '\u914d\u7f6e\u6709\u6548\uff0c\u6ca1\u6709\u53d1\u73b0\u95ee\u9898\u3002', en: 'Configuration is valid.' },
+  exportInsideWorkspace: { zh: '\u5bfc\u51fa\u8def\u5f84\u5fc5\u987b\u4f4d\u4e8e\u5f53\u524d\u9879\u76ee\u5185\u3002', en: 'Export path must stay inside the current project.' },
+  exported: { zh: '\u5df2\u5bfc\u51fa\u8131\u654f\u914d\u7f6e', en: 'Redacted config exported' },
+};
+
+function configLabel(isZh: boolean, key: ConfigLabelKey): string {
+  const label = CONFIG_LABELS[key];
+  return isZh ? label.zh : label.en;
+}
 function renderVersionCommand(): void {
   console.log('');
   console.log(chalk.bold(`  RoxyCode v${APP_VERSION}`));
@@ -821,8 +1116,10 @@ type ZhKey =
   | 'modeEconomic'
   | 'modeStandard'
   | 'modeUltimate'
+  | 'diagnosticsDescription'
   | 'memoryDescription'
   | 'memoryList'
+  | 'memoryStats'
   | 'memoryAdd'
   | 'memoryForget'
   | 'memoryTypes'
@@ -879,8 +1176,10 @@ const ZH: Record<ZhKey, string> = {
   modeEconomic: 'Economic\uff1a\u63a7\u5236\u6210\u672c\u7684 ReAct \u5de5\u5177\u5faa\u73af',
   modeStandard: 'Standard\uff1a\u8ba1\u5212 -> \u6267\u884c -> \u9a8c\u8bc1',
   modeUltimate: 'Ultimate\uff1aCoordinator \u548c\u591a Agent \u5e76\u884c\u5206\u6790',
+  diagnosticsDescription: '\u8fd0\u884c Claude Code \u98ce\u683c\u7684 RoxyCode \u8fd0\u884c\u8bca\u65ad\u62a5\u544a',
   memoryDescription: '\u7ba1\u7406 RoxyCode \u957f\u671f\u8bb0\u5fc6',
   memoryList: '\u5217\u51fa\u8bb0\u5fc6',
+  memoryStats: '\u67e5\u770b\u8bb0\u5fc6\u7edf\u8ba1',
   memoryAdd: '\u6dfb\u52a0\u4e00\u6761\u8bb0\u5fc6',
   memoryForget: '\u5f52\u6863\u4e00\u6761\u8bb0\u5fc6',
   memoryTypes: '\u663e\u793a\u8bb0\u5fc6\u7c7b\u578b',
@@ -914,13 +1213,3 @@ const ZH: Record<ZhKey, string> = {
 function zh(key: ZhKey): string {
   return ZH[key];
 }
-
-
-
-
-
-
-
-
-
-

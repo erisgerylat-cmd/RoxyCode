@@ -12,7 +12,7 @@
  * API 文档: https://platform.openai.com/docs/api-reference
  */
 
-import { BaseLLMProvider } from './BaseLLMProvider.js';
+import { BaseLLMProvider, type RetryConfig } from './BaseLLMProvider.js';
 import type { LLMProviderConfig } from '../../core/types/llm.js';
 
 /** OpenAI 2026 模型上下文长度表 */
@@ -43,8 +43,8 @@ export class OpenAIProvider extends BaseLLMProvider {
   readonly supportsTools = true;
   readonly maxContextTokens: number;
 
-  constructor(config: LLMProviderConfig) {
-    super(config);
+  constructor(config: LLMProviderConfig, retry?: Partial<RetryConfig>) {
+    super(config, retry);
     const modelInfo = OPENAI_MODELS[config.model];
     this.maxContextTokens = modelInfo?.maxContextTokens ?? DEFAULT_MAX_CONTEXT;
   }

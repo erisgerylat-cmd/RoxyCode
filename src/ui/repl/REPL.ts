@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+﻿import chalk from 'chalk';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import type { CharacterManager } from '../../aesthetic/character/CharacterManager.js';
@@ -23,12 +23,17 @@ import { requestPermissionConfirmation } from './PermissionConfirmPanel.js';
 import { APP_VERSION } from '../../core/constants.js';
 import { normalizeLanguage, t, type Language } from '../../i18n/index.js';
 import { InteractionRenderer } from '../renderers/InteractionRenderer.js';
+import { StatusBar, type StatusState } from '../renderers/StatusBar.js';
+import { ToolActivityRenderer } from '../renderers/ToolActivityRenderer.js';
 import { SessionStore } from '../../session/store/SessionStore.js';
 import { AutoMemoryExtractor, MemoryPolicyError, MemoryStore } from '../../session/memory/index.js';
 import { HookLoader, HookManager } from '../../hooks/index.js';
 import { McpConfigLoader, McpToolAdapter } from '../../mcp/index.js';
 import { PluginLoader, collectPluginContributions, createPluginCommands } from '../../plugin/index.js';
 import type { CommandDefinition } from '../../commands/CommandRegistry.js';
+import { createRuntimeState, type QueryProfileSummary, type RuntimeExtensionSnapshot, type RuntimeState } from '../../runtime/index.js';
+import { formatErrorForDisplay, getRoxyErrorDescriptor, toError } from '../../core/errors.js';
+import { TelemetryLogger } from '../../telemetry/index.js';
 
 export interface REPLOptions {
   characterManager: CharacterManager;
@@ -54,8 +59,12 @@ export class REPL {
   private readonly multiLineCollector = new MultiLineCollector();
   private readonly palette = new CommandPalette({ maxVisible: 10 });
   private readonly interactionRenderer: InteractionRenderer;
+  private readonly statusBar: StatusBar;
+  private readonly toolActivityRenderer: ToolActivityRenderer;
   private readonly hookManager: HookManager;
   private readonly mcpToolAdapter: McpToolAdapter;
+  private readonly runtimeState: RuntimeState;
+  private readonly telemetryLogger: TelemetryLogger;
   private readonly sessionStartTime = Date.now();
   private sessionStore = new SessionStore(process.cwd());
   private readonly memoryStore = new MemoryStore({ cwd: process.cwd() });
@@ -79,18 +88,48 @@ export class REPL {
     const toolRuntime = createDefaultToolRuntime(process.cwd());
     this.toolRegistry = toolRuntime.registry;
     this.toolExecutor = toolRuntime.executor;
-    this.hookManager = new HookManager({ hooks: [], llmProvider: this.llmProvider });
+    this.runtimeState = createRuntimeState({
+      cwd: process.cwd(),
+      language: this.getLanguage(),
+      characterId: this.characterManager.getCurrentCharacter().id,
+      providerId: this.llmProvider.id,
+      model: String(this.configManager.get('llm.model') || this.llmProvider.id),
+      isInteractive: process.stdin.isTTY,
+      sessionId: this.sessionStore.sessionId,
+      transcriptPath: this.sessionStore.path,
+    });
+    this.telemetryLogger = new TelemetryLogger({
+      cwd: process.cwd(),
+      sessionId: this.sessionStore.sessionId,
+      runtimeId: this.runtimeState.getRuntimeId(),
+    });
+    this.runtimeState.recordTelemetry(this.telemetryLogger.snapshot());
+    this.hookManager = new HookManager({
+      hooks: [],
+      llmProvider: this.llmProvider,
+      onRun: record => {
+        this.runtimeState.recordHookRun(record);
+        void this.recordHookTelemetry(record);
+      },
+    });
     this.mcpToolAdapter = new McpToolAdapter(process.cwd());
     this.agentLoop = this.createAgentLoop();
     this.easterEggEngine = new EasterEggEngine(options.characterManager);
     this.demonEyeMode = new DemonEyeMode();
     this.telepathyMode = new TelepathyMode();
     this.interactionRenderer = new InteractionRenderer(options.characterManager.getCurrentCharacter());
+    this.statusBar = new StatusBar(options.characterManager.getCurrentCharacter());
+    this.toolActivityRenderer = new ToolActivityRenderer({
+      character: options.characterManager.getCurrentCharacter(),
+      language: this.getLanguage(),
+    });
+    this.toolActivityRenderer.setTools(this.toolRegistry.list());
     this.registerBuiltinCommands();
     this.syncPaletteItems();
   }
 
   async start(): Promise<void> {
+    this.runtimeState.setInteractive(process.stdin.isTTY);
     await this.initializeSession();
     await this.loadExtensions();
     if (!process.stdin.isTTY) return this.startFallback({ initialized: true });
@@ -119,10 +158,12 @@ export class REPL {
     const lines = input.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     if (lines.length > 1 && lines.every(line => line.startsWith('/') && !line.startsWith('//'))) {
       for (const line of lines) await this.onLineSubmit(line);
+      await this.telemetryLogger.flush();
       return;
     }
 
     await this.onLineSubmit(input);
+    await this.telemetryLogger.flush();
   }
 
   private registerBuiltinCommands(): void {
@@ -143,6 +184,9 @@ export class REPL {
       getSessionElapsedMs: () => Date.now() - this.sessionStartTime,
       getHistoryCount: () => this.inputHistory.getHistory().length,
       getCommandCount: () => this.commandRegistry.list().length,
+      getTools: () => this.toolRegistry.list(),
+      getRuntimeSnapshot: () => this.runtimeState.snapshot(),
+      getMemoryStats: () => this.memoryStore.getStats({ enabled: this.configManager.get('memory.auto') !== false, language: this.getLanguage() }),
       showHelp: () => this.showHelp(),
       showCommandHelp: name => this.showCommandHelp(name),
       showHistory: () => this.showHistory(),
@@ -213,13 +257,46 @@ export class REPL {
       if (!this.toolRegistry.has(tool.definition.name)) this.toolRegistry.register(tool);
     }
 
+    const registeredCommands = this.commandRegistry.list({ includeHidden: true });
+    const extensionSnapshot: RuntimeExtensionSnapshot = {
+      plugins: { enabled: pluginResult.enabled.length, disabled: pluginResult.disabled.length, errors: pluginResult.errors },
+      hooks: { count: hookResult.hooks.length, errors: hookResult.errors },
+      mcp: {
+        servers: mcpResult.servers.length,
+        tools: mcpTools.tools.length,
+        errors: [
+          ...mcpResult.errors,
+          ...mcpTools.errors.map(error => ({ source: `mcp:${error.server}`, message: error.message })),
+        ],
+      },
+      commands: {
+        builtin: registeredCommands.filter(command => command.source !== 'plugin').length,
+        extension: this.extensionCommands.length,
+        total: registeredCommands.length,
+      },
+      tools: {
+        builtin: getBuiltinTools().length,
+        mcp: mcpTools.tools.length,
+        total: this.toolRegistry.list().length,
+      },
+    };
+    this.runtimeState.recordExtensions(extensionSnapshot);
+    this.toolActivityRenderer.setTools(this.toolRegistry.list());
+
     await this.sessionStore.append({
       type: 'note',
       note: 'extensions loaded',
       metadata: {
         plugins: { enabled: pluginResult.enabled.length, disabled: pluginResult.disabled.length, errors: pluginResult.errors },
         hooks: { count: hookResult.hooks.length, errors: hookResult.errors },
-        mcp: { servers: mcpResult.servers.length, tools: mcpTools.tools.length, errors: [...mcpResult.errors, ...mcpTools.errors] },
+        mcp: {
+          servers: mcpResult.servers.length,
+          tools: mcpTools.tools.length,
+          errors: [
+            ...mcpResult.errors,
+            ...mcpTools.errors.map(error => ({ source: `mcp:${error.server}`, message: error.message })),
+          ],
+        },
       },
     }).catch(() => undefined);
   }
@@ -230,6 +307,15 @@ export class REPL {
 
   private getText() {
     return t(this.getLanguage()).commands;
+  }
+
+  private syncRuntimeConfig(): void {
+    this.runtimeState.updateConfig({
+      language: this.getLanguage(),
+      characterId: this.characterManager.getCurrentCharacter().id,
+      providerId: this.llmProvider.id,
+      model: String(this.configManager.get('llm.model') || this.llmProvider.id),
+    });
   }
 
   private getCharacterSubcommands(): SubcommandDefinition[] {
@@ -291,6 +377,8 @@ export class REPL {
 
     this.inputHistory.add(input);
     this.conversationTurns++;
+    this.syncRuntimeConfig();
+    this.runtimeState.updateSession({ turns: this.conversationTurns, messageCount: this.agentMessages.length });
     const easterEgg = this.easterEggEngine.checkOnInput(input);
     if (easterEgg) console.log(chalk.hex(this.characterManager.getCurrentCharacter().theme.accent)(`  "${easterEgg}"`));
 
@@ -307,6 +395,8 @@ export class REPL {
     if (cmd) {
       await this.sessionStore.append({ type: 'command', command: { name: cmd.name, args: cmd.args, raw: input } });
       await this.runCommand(cmd.name, cmd.args);
+      this.syncRuntimeConfig();
+      this.runtimeState.updateSession({ turns: this.conversationTurns, messageCount: this.agentMessages.length });
     } else {
       await this.sessionStore.appendMessage(userMessage(input), 'user');
       await this.runAgentInput(input);
@@ -325,11 +415,11 @@ export class REPL {
 
     const isZh = this.getLanguage() === 'zh-CN';
     if (isZh) {
-      console.log(chalk.yellow('  这看起来是 PowerShell/终端命令，不是 RoxyCode 对话命令。'));
-      console.log(chalk.dim('  请先退出 RoxyCode，回到 IDEA 外层终端执行这些命令，然后再启动 RoxyCode。'));
-      console.log(chalk.dim('  示例:'));
+      console.log(chalk.yellow('  \u8fd9\u770b\u8d77\u6765\u662f PowerShell/\u7ec8\u7aef\u547d\u4ee4\uff0c\u4e0d\u662f RoxyCode \u5bf9\u8bdd\u547d\u4ee4\u3002'));
+      console.log(chalk.dim('  \u8bf7\u5148\u9000\u51fa RoxyCode\uff0c\u56de\u5230 IDEA \u5916\u5c42\u7ec8\u7aef\u6267\u884c\u8fd9\u4e9b\u547d\u4ee4\uff0c\u7136\u540e\u518d\u542f\u52a8 RoxyCode\u3002'));
+      console.log(chalk.dim('  \u793a\u4f8b:'));
       console.log(chalk.dim('    $env:ROXY_OPENAI_API_KEY="sk-..."'));
-      console.log(chalk.dim('    $env:ROXY_OPENAI_BASE_URL="https://api.mioufun.top/v1"'));
+      console.log(chalk.dim('    $env:ROXY_OPENAI_BASE_URL="https://api.example.com/v1"'));
       console.log(chalk.dim('    pnpm start'));
     } else {
       console.log(chalk.yellow('  This looks like a PowerShell/shell command, not a RoxyCode chat command.'));
@@ -337,11 +427,17 @@ export class REPL {
     }
     return true;
   }
+
   private async runCommand(name: string, args: string[]): Promise<void> {
     this.processing = true;
     const startedAt = Date.now();
     let handled = false;
     let failed = false;
+    await this.telemetryLogger.log({
+      name: 'command.execute.start',
+      category: 'command',
+      attributes: { commandName: name, argCount: args.length },
+    }).then(() => this.runtimeState.recordTelemetry(this.telemetryLogger.snapshot()));
     try {
       const hook = await this.hookManager.run('command', {
         cwd: process.cwd(),
@@ -365,6 +461,14 @@ export class REPL {
       this.processing = false;
     }
 
+    await this.telemetryLogger.log({
+      name: failed ? 'command.execute.error' : 'command.execute.done',
+      category: 'command',
+      durationMs: Date.now() - startedAt,
+      success: handled && !failed,
+      attributes: { commandName: name, argCount: args.length, handled },
+    }).then(() => this.runtimeState.recordTelemetry(this.telemetryLogger.snapshot()));
+
     if (!handled && !failed) {
       const text = this.getText();
       console.log(chalk.red(`  ${text.unknownCommand}: /${name}`));
@@ -378,6 +482,7 @@ export class REPL {
       contextManager: this.contextManager,
       toolExecutor: this.toolExecutor,
       tools: this.toolRegistry.definitions(),
+      toolRuntimeTools: this.toolRegistry.list(),
       config: this.configManager.snapshot(),
       cwd: process.cwd(),
       sessionId: this.sessionStore.sessionId,
@@ -386,6 +491,7 @@ export class REPL {
       confirm: prompt => this.confirmToolPrompt(prompt, false),
       confirmSecond: prompt => this.confirmToolPrompt(prompt, true),
       hooks: this.hookManager,
+      telemetry: this.telemetryLogger,
     });
   }
 
@@ -398,20 +504,170 @@ export class REPL {
     this.agentLoop = this.createAgentLoop();
     const mode = normalizeAgentMode(this.configManager.get('mode') as string | undefined);
     const beforeCount = this.agentMessages.length;
+    this.runtimeState.recordAgentStart({ mode, userInput: input });
+    this.toolActivityRenderer.resetTurn();
+    this.toolActivityRenderer.updateCharacter(this.characterManager.getCurrentCharacter());
+    this.toolActivityRenderer.setLanguage(this.getLanguage());
+    void this.telemetryLogger.log({
+      name: 'agent.run.start',
+      category: 'agent',
+      attributes: { mode, inputChars: input.length, historyMessages: this.agentMessages.length },
+    }).then(() => this.runtimeState.recordTelemetry(this.telemetryLogger.snapshot()));
     try {
       for await (const event of this.agentLoop.run({ userInput: input, history: this.agentMessages, mode })) {
+        this.runtimeState.recordAgentEvent(event);
+        void this.recordAgentTelemetry(event);
+        await this.recordSessionAgentEvent(event).catch(() => undefined);
         this.renderAgentEvent(event);
         if (event.type === 'done') {
           const nextMessages = event.messages.filter(message => message.role !== 'system');
           const additions = nextMessages.slice(Math.min(nextMessages.length, beforeCount + 1));
           for (const message of additions) await this.sessionStore.appendMessage(message);
           this.agentMessages = nextMessages;
+          this.runtimeState.updateSession({ messageCount: this.agentMessages.length, turns: this.conversationTurns });
           void this.extractAutoMemories(nextMessages).catch(() => undefined);
         }
       }
+    } catch (error) {
+      const err = toError(error);
+      this.runtimeState.recordAgentEvent({ type: 'error', error: err });
+      throw err;
     } finally {
+      if (this.statusBar.isActive()) this.statusBar.clear();
       this.processing = false;
     }
+  }
+
+  private startStatusBar(state: StatusState, label?: string): void {
+    if (!process.stdin.isTTY) return;
+    this.statusBar.updateCharacter(this.characterManager.getCurrentCharacter());
+    if (!this.statusBar.isActive()) this.statusBar.start();
+    this.statusBar.setState(state);
+    if (label) this.statusBar.setLabel(label);
+  }
+
+  private updateStatusBar(state: StatusState, label?: string): void {
+    if (!process.stdin.isTTY || !this.statusBar.isActive()) return;
+    this.statusBar.setState(state);
+    this.statusBar.setLabel(label ?? '');
+  }
+
+  private clearStatusBar(): void {
+    if (this.statusBar.isActive()) this.statusBar.clear();
+  }
+
+  private recordAgentTelemetry(event: AgentLoopEvent): void {
+    let name: string | null = null;
+    let category: 'agent' | 'llm' | 'tool' | 'runtime' = 'agent';
+    let success: boolean | undefined;
+    const attributes: Record<string, unknown> = {};
+
+    switch (event.type) {
+      case 'mode_start':
+        name = 'agent.mode_start';
+        attributes.mode = event.mode;
+        attributes.label = event.label;
+        break;
+      case 'model_request_start':
+        name = 'llm.request_start';
+        category = 'llm';
+        attributes.phase = event.phase;
+        attributes.iteration = event.iteration;
+        break;
+      case 'tool_call_start':
+        name = 'tool.call_start';
+        category = 'tool';
+        attributes.toolName = event.toolCall.name;
+        attributes.argumentKeys = Object.keys(event.toolCall.arguments);
+        break;
+      case 'tool_execution_start':
+        name = 'tool.execution_start';
+        category = 'tool';
+        attributes.toolName = event.toolCall.name;
+        attributes.argumentKeys = Object.keys(event.toolCall.arguments);
+        break;
+      case 'tool_result':
+        name = 'tool.result_seen';
+        category = 'tool';
+        success = event.result.success;
+        attributes.toolName = event.toolCall.name;
+        attributes.durationMs = event.result.duration;
+        attributes.outputChars = event.result.output.length;
+        attributes.error = event.result.error;
+        break;
+      case 'context_compacted':
+        name = 'runtime.context_compacted';
+        category = 'runtime';
+        attributes.layer = event.layer;
+        attributes.beforeTokens = event.beforeTokens;
+        attributes.afterTokens = event.afterTokens;
+        break;
+      case 'token_budget_continue':
+        name = 'agent.token_budget_continue';
+        attributes.continuationCount = event.continuationCount;
+        attributes.pct = event.pct;
+        attributes.turnTokens = event.turnTokens;
+        attributes.budget = event.budget;
+        break;
+      case 'token_budget_done':
+        name = 'agent.token_budget_done';
+        attributes.continuationCount = event.continuationCount;
+        attributes.pct = event.pct;
+        attributes.turnTokens = event.turnTokens;
+        attributes.budget = event.budget;
+        attributes.diminishingReturns = event.diminishingReturns;
+        attributes.durationMs = event.durationMs;
+        break;
+      case 'usage':
+        name = 'llm.usage';
+        category = 'llm';
+        success = true;
+        attributes.inputTokens = event.usage.inputTokens;
+        attributes.outputTokens = event.usage.outputTokens;
+        attributes.totalTokens = event.usage.totalTokens;
+        attributes.cost = event.usage.cost;
+        break;
+      case 'done':
+        name = 'agent.done';
+        success = true;
+        attributes.messageCount = event.messages.length;
+        attributes.totalTokens = event.usage.totalTokens;
+        if (event.profile) addQueryProfileTelemetryAttributes(attributes, event.profile);
+        break;
+      case 'error':
+        name = 'agent.error';
+        success = false;
+        attributes.error = event.error.message;
+        attributes.errorName = event.error.name;
+        if (event.profile) addQueryProfileTelemetryAttributes(attributes, event.profile);
+        break;
+    }
+
+    if (!name) return;
+    void this.telemetryLogger.log({ name, category, success, attributes }).then(() => {
+      this.runtimeState.recordTelemetry(this.telemetryLogger.snapshot());
+    });
+  }
+
+  private recordHookTelemetry(record: Parameters<RuntimeState['recordHookRun']>[0]): void {
+    const errors = record.executions.filter(execution => execution.outcome === 'error').length;
+    void this.telemetryLogger.log({
+      name: record.blocked ? 'hook.run.blocked' : errors > 0 ? 'hook.run.error' : 'hook.run.done',
+      category: 'hook',
+      durationMs: record.duration,
+      success: !record.blocked && errors === 0,
+      attributes: {
+        event: record.event,
+        matched: record.matched,
+        blocked: record.blocked,
+        errors,
+        reason: record.reason,
+        hookIds: record.executions.map(execution => execution.hookId),
+        outcomes: record.executions.map(execution => execution.outcome),
+      },
+    }).then(() => {
+      this.runtimeState.recordTelemetry(this.telemetryLogger.snapshot());
+    });
   }
 
   private renderAgentEvent(event: AgentLoopEvent): void {
@@ -427,32 +683,66 @@ export class REPL {
     switch (event.type) {
       case 'mode_start':
         console.log(primary(`  ${event.label} - ${event.description}`));
+        this.startStatusBar('thinking', zh ? '\u6b63\u5728\u51c6\u5907\u4e0a\u4e0b\u6587\u4e0e\u5de5\u5177...' : 'Preparing context and tools...');
+        break;
+      case 'model_request_start':
+        this.startStatusBar(modelPhaseToStatus(event.phase), modelPhaseLabel(event.phase, event.iteration, zh));
         break;
       case 'planning':
+        this.clearStatusBar();
         console.log(accent(`\n  ${zh ? zhText('plan') : 'Plan'}`));
         console.log(indentBlock(event.text));
         break;
       case 'text_delta':
+        if (this.statusBar.isActive()) this.statusBar.onStreamChunk(event.text);
+        this.clearStatusBar();
         process.stdout.write(event.text);
         break;
       case 'assistant_message':
         if (event.text.trim() && !event.text.endsWith('\n')) process.stdout.write('\n');
         break;
       case 'tool_call_start':
-        console.log(secondary(`\n  ${zh ? zhText('tool') : 'Tool'}: ${event.toolCall.name}`));
+        this.clearStatusBar();
+        this.toolActivityRenderer.beginToolCall(event.toolCall);
+        this.startStatusBar('analyzing', `${zh ? '\u6a21\u578b\u8bf7\u6c42\u5de5\u5177' : 'Model requested tool'}: ${event.toolCall.name}`);
         break;
-      case 'tool_call_delta':
+      case 'tool_call_delta': {
+        this.toolActivityRenderer.appendToolCallDelta(event.id, event.argsDelta);
+        const progress = this.toolActivityRenderer.getArgumentProgress(event.id);
+        if (progress) this.updateStatusBar('analyzing', progress);
+        break;
+      }
+      case 'tool_execution_start':
+        this.clearStatusBar();
+        this.toolActivityRenderer.markToolExecuting(event.toolCall);
+        this.startStatusBar('tool');
+        this.statusBar.onToolStart(event.toolCall.name, event.toolCall.arguments);
         break;
       case 'tool_result':
-        console.log(success(`  ${zh ? zhText('toolResult') : 'Tool result'}: ${event.toolCall.name} ${event.result.success ? 'OK' : 'ERR'} - ${event.result.duration}ms`));
-        if (!event.result.success && event.result.error) console.log(error(`  ${event.result.error}`));
+        this.clearStatusBar();
+        this.toolActivityRenderer.markToolResult(event.toolCall, event.result);
+        this.statusBar.onToolEnd();
         break;
       case 'verification':
+        this.clearStatusBar();
         console.log(accent(`\n  ${zh ? zhText('verification') : 'Verification'}`));
         console.log(indentBlock(event.text));
         break;
+      case 'context_compacted':
+        this.clearStatusBar();
+        console.log(dim(`  ${zh ? '\u4e0a\u4e0b\u6587\u5df2\u81ea\u52a8\u538b\u7f29' : 'Context compacted'}: ${event.beforeTokens.toLocaleString()} -> ${event.afterTokens.toLocaleString()} tokens (${event.layer})`));
+        this.startStatusBar('analyzing', zh ? '\u4e0a\u4e0b\u6587\u81ea\u52a8\u538b\u7f29\u5b8c\u6210' : 'Context compacted');
+        break;
+      case 'token_budget_continue':
+        console.log(dim(`  ${zh ? 'Token \u9884\u7b97\u7eed\u5199' : 'Token budget continue'} #${event.continuationCount}: ${event.pct}% (${event.turnTokens.toLocaleString()} / ${event.budget.toLocaleString()})`));
+        break;
+      case 'token_budget_done':
+        console.log(dim(`  ${zh ? 'Token \u9884\u7b97\u7ed3\u675f' : 'Token budget done'}: ${event.pct}% (${event.turnTokens.toLocaleString()} / ${event.budget.toLocaleString()})`));
+        break;
       case 'agent_start':
+        this.clearStatusBar();
         console.log(secondary(`  ${event.name}: ${event.focus}`));
+        this.startStatusBar('executing', `${event.name}: ${event.focus}`);
         break;
       case 'agent_done':
         console.log(success(`  ${event.name} ${zh ? zhText('done') : 'done'}`));
@@ -485,16 +775,62 @@ export class REPL {
       case 'multi_agent_done':
         break;
       case 'usage':
-        console.log(dim(`  tokens input=${event.usage.inputTokens} output=${event.usage.outputTokens} total=${event.usage.totalTokens}`));
+        this.statusBar.updateTokens(event.usage.inputTokens, event.usage.outputTokens);
+        if (event.usage.cost !== undefined) this.statusBar.setCost(event.usage.cost);
+        if (!process.stdin.isTTY || !this.statusBar.isActive()) console.log(dim(`  tokens input=${event.usage.inputTokens} output=${event.usage.outputTokens} total=${event.usage.totalTokens}`));
         break;
       case 'done':
+        if (this.statusBar.isActive()) this.statusBar.end(event.usage.cost !== undefined ? `$${event.usage.cost.toFixed(4)}` : undefined);
+        this.toolActivityRenderer.renderTurnSummary();
+        break;
+      case 'error': {
+        const display = formatErrorForDisplay(event.error, this.getLanguage());
+        if (this.statusBar.isActive()) this.statusBar.showError(event.error.message);
+        console.log(error(`  Agent Loop ${zh ? zhText('failed') : 'failed'}: ${display}`));
+        break;
+      }
+    }
+  }
+  private async recordSessionAgentEvent(event: AgentLoopEvent): Promise<void> {
+    switch (event.type) {
+      case 'mode_start':
+        await this.sessionStore.append({ type: 'note', note: 'agent mode start', metadata: { mode: event.mode, label: event.label } });
+        break;
+      case 'model_request_start':
+        await this.sessionStore.append({ type: 'note', note: 'model request start', metadata: { phase: event.phase, iteration: event.iteration } });
+        break;
+      case 'tool_execution_start':
+        await this.sessionStore.append({ type: 'note', note: 'tool execution start', metadata: { tool: event.toolCall.name, args: sanitizeSessionMetadata(event.toolCall.arguments) } });
+        break;
+      case 'tool_result':
+        await this.sessionStore.append({
+          type: 'note',
+          note: 'tool execution result',
+          metadata: {
+            tool: event.toolCall.name,
+            success: event.result.success,
+            duration: event.result.duration,
+            error: event.result.error,
+          },
+        });
+        break;
+      case 'context_compacted':
+        await this.sessionStore.append({ type: 'note', note: 'context compacted', metadata: { layer: event.layer, beforeTokens: event.beforeTokens, afterTokens: event.afterTokens } });
+        break;
+      case 'token_budget_continue':
+        await this.sessionStore.append({ type: 'note', note: 'token budget continue', metadata: { continuationCount: event.continuationCount, pct: event.pct, turnTokens: event.turnTokens, budget: event.budget } });
+        break;
+      case 'token_budget_done':
+        await this.sessionStore.append({ type: 'note', note: 'token budget done', metadata: { continuationCount: event.continuationCount, pct: event.pct, turnTokens: event.turnTokens, budget: event.budget, diminishingReturns: event.diminishingReturns, durationMs: event.durationMs } });
+        break;
+      case 'usage':
+        await this.sessionStore.append({ type: 'note', note: 'model usage', metadata: { usage: event.usage } });
         break;
       case 'error':
-        console.log(error(`  Agent Loop ${zh ? zhText('failed') : 'failed'}: ${event.error.message}`));
+        await this.sessionStore.append({ type: 'note', note: 'agent error', metadata: { message: event.error.message, descriptor: getRoxyErrorDescriptor(event.error) } });
         break;
     }
   }
-
   private async extractAutoMemories(messages: Message[]): Promise<void> {
     const enabled = this.configManager.get('memory.auto') !== false;
     if (!enabled) return;
@@ -521,6 +857,14 @@ export class REPL {
       character: this.characterManager.getCurrentCharacter().id,
       language: this.getLanguage(),
     });
+    this.runtimeState.switchSession({
+      sessionId: this.sessionStore.sessionId,
+      transcriptPath: this.sessionStore.path,
+      messageCount: this.agentMessages.length,
+      turns: this.conversationTurns,
+    });
+    this.telemetryLogger.setSession(this.sessionStore.sessionId);
+    this.runtimeState.recordTelemetry(this.telemetryLogger.snapshot());
   }
 
   private async resumeSession(query?: string): Promise<void> {
@@ -535,6 +879,14 @@ export class REPL {
     this.agentMessages = (await this.sessionStore.readMessages()).filter(message => message.role !== 'system');
     this.conversationTurns = this.agentMessages.filter(message => message.role === 'user').length;
     this.agentLoop = this.createAgentLoop();
+    this.runtimeState.switchSession({
+      sessionId: this.sessionStore.sessionId,
+      transcriptPath: this.sessionStore.path,
+      messageCount: this.agentMessages.length,
+      turns: this.conversationTurns,
+    });
+    this.telemetryLogger.setSession(this.sessionStore.sessionId);
+    this.runtimeState.recordTelemetry(this.telemetryLogger.snapshot());
 
     console.log(chalk.green(`  ${zh ? zhText('sessionResumed') : 'Session resumed'}: ${found.sessionId}`));
     console.log(chalk.dim(`  ${found.path}`));
@@ -548,6 +900,7 @@ export class REPL {
     const outputPath = resolve(process.cwd(), target || `.roxycode/exports/session-${this.sessionStore.sessionId}.${extension}`);
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, content, 'utf8');
+    this.runtimeState.updateSession({ messageCount: this.agentMessages.length, turns: this.conversationTurns });
     console.log(chalk.green(`  ${zh ? zhText('sessionExported') : 'Session exported'}: ${outputPath}`));
   }
 
@@ -558,6 +911,7 @@ export class REPL {
     this.agentMessages = result.messages.filter(message => message.role !== 'system');
     this.conversationTurns = this.agentMessages.filter(message => message.role === 'user').length;
     this.agentLoop = this.createAgentLoop();
+    this.runtimeState.updateSession({ messageCount: this.agentMessages.length, turns: this.conversationTurns });
     console.log(chalk.green(`  ${zh ? zhText('sessionRewound') : 'Session rewound'}: ${this.agentMessages.length} ${zh ? zhText('messagesLower') : 'messages'}`));
     console.log(chalk.dim(`  ${zh ? zhText('removed') : 'Removed'}: ${result.removed}`));
   }
@@ -572,6 +926,8 @@ export class REPL {
     }
 
     this.agentMessages = result.messages.filter(message => message.role !== 'system');
+    this.runtimeState.recordAgentEvent({ type: 'context_compacted' });
+    this.runtimeState.updateSession({ messageCount: this.agentMessages.length, turns: this.conversationTurns });
     await this.sessionStore.append({
       type: 'compact',
       summary: result.summary,
@@ -599,10 +955,16 @@ export class REPL {
     }
 
     const readerWasActive = this.reader?.isActive === true;
+    this.clearStatusBar();
+    this.toolActivityRenderer.updateCharacter(character);
+    this.toolActivityRenderer.setLanguage(language);
+    this.toolActivityRenderer.markPermissionWaiting(prompt, second);
+    this.startStatusBar('waiting', language === 'en-US' ? 'Waiting for permission confirmation...' : '\u7b49\u5f85\u4f60\u786e\u8ba4\u5de5\u5177\u6743\u9650...');
     if (readerWasActive) this.reader?.pause();
     try {
       return await requestPermissionConfirmation({ prompt, second, character, language });
     } finally {
+      this.clearStatusBar();
       if (readerWasActive && !this.shutdownRequested) this.reader?.resume({ redraw: false });
     }
   }
@@ -818,11 +1180,68 @@ export class REPL {
   private handleLineSubmitError(line: string, error: unknown): void {
     this.processing = false;
     this.closePalette();
-    const message = error instanceof Error ? error.message : String(error);
+    const err = toError(error);
+    const message = formatErrorForDisplay(err, this.getLanguage());
+    this.runtimeState.recordError('repl', err.message, { line: line.trim(), descriptor: getRoxyErrorDescriptor(err) });
     console.log(chalk.hex(this.characterManager.getCurrentCharacter().theme.error)(`  ERR ${line.trim()}: ${message}`));
     if (!this.shutdownRequested && this.reader?.isActive) this.showPrompt();
   }
 }
+
+type ModelRequestPhase = 'planning' | 'response' | 'tool_loop' | 'verification';
+
+function addQueryProfileTelemetryAttributes(attributes: Record<string, unknown>, profile: QueryProfileSummary): void {
+  attributes.queryProfileId = profile.id;
+  attributes.queryTotalMs = profile.totalMs;
+  attributes.queryFirstTokenMs = profile.firstTokenMs;
+  attributes.queryModelRequestCount = profile.modelRequestCount;
+  attributes.queryToolExecutionCount = profile.toolExecutionCount;
+  attributes.queryContextCompactionCount = profile.contextCompactionCount;
+  attributes.querySlowestPhase = profile.slowestPhase?.name;
+  attributes.querySlowestPhaseMs = profile.slowestPhase?.durationMs;
+}
+function modelPhaseToStatus(phase: ModelRequestPhase): StatusState {
+  switch (phase) {
+    case 'planning': return 'planning';
+    case 'verification': return 'analyzing';
+    case 'tool_loop': return 'thinking';
+    case 'response':
+    default: return 'thinking';
+  }
+}
+
+function modelPhaseLabel(phase: ModelRequestPhase, iteration: number | undefined, zh: boolean): string {
+  const suffix = iteration ? ` #${iteration}` : '';
+  if (!zh) {
+    switch (phase) {
+      case 'planning': return `Planning with model${suffix}`;
+      case 'verification': return `Verifying result${suffix}`;
+      case 'tool_loop': return `Thinking with tools${suffix}`;
+      case 'response': return `Thinking${suffix}`;
+    }
+  }
+  switch (phase) {
+    case 'planning': return `\u6b63\u5728\u751f\u6210\u8ba1\u5212${suffix}`;
+    case 'verification': return `\u6b63\u5728\u9a8c\u8bc1\u7ed3\u679c${suffix}`;
+    case 'tool_loop': return `\u6b63\u5728\u601d\u8003\u662f\u5426\u8c03\u7528\u5de5\u5177${suffix}`;
+    case 'response': return `\u6b63\u5728\u751f\u6210\u56de\u590d${suffix}`;
+  }
+}
+function sanitizeSessionMetadata(value: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const lower = key.toLowerCase();
+    if (lower.includes('key') || lower.includes('token') || lower.includes('secret') || lower.includes('password')) {
+      out[key] = '[redacted]';
+    } else if (typeof item === 'string' && item.length > 300) {
+      out[key] = `${item.slice(0, 300)}... [${item.length} chars]`;
+    } else {
+      out[key] = item;
+    }
+  }
+  return out;
+}
+
 
 function indentBlock(text: string): string {
   return text.split('\n').map(line => `  ${line}`).join('\n');
@@ -876,6 +1295,8 @@ const ZH: Record<ZhKey, string> = {
 function zhText(key: ZhKey): string {
   return ZH[key];
 }
+
+
 
 
 

@@ -18,6 +18,32 @@ export { roxy, rudeus, eris, sylphiette, nanahoshi } from '../aesthetic/characte
 
 // ── 配置管理 ──
 export { ConfigManager } from './ConfigManager.js';
+export {
+  AbortExecutionError,
+  HookBlockedError,
+  PermissionDeniedError,
+  RoxyError,
+  TelemetrySafeError,
+  ToolExecutionError,
+  ToolInputValidationError,
+  classifyError,
+  classifyToolError,
+  errorMessage,
+  formatErrorForDisplay,
+  formatValidationIssues,
+  getErrnoCode,
+  getRoxyErrorDescriptor,
+  isAbortError,
+  toError,
+  truncateErrorText,
+} from './errors.js';
+export type {
+  ErrorDescriptor,
+  RoxyErrorCategory,
+  RoxyErrorOptions,
+  RoxyRecoveryAction,
+  ValidationIssue,
+} from './errors.js';
 
 // ── 常量 ──
 export {

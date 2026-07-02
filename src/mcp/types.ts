@@ -7,12 +7,20 @@ export interface McpServerDefinition extends MCPServerConfig {
   pluginId?: string;
 }
 
+export interface McpToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  openWorldHint?: boolean;
+}
+
 export interface McpToolDefinition {
   serverName: string;
   originalName: string;
   roxyName: string;
   description: string;
   inputSchema: ToolParameterSchema;
+  annotations?: McpToolAnnotations;
 }
 
 export interface McpLoadError {

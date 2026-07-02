@@ -2,13 +2,27 @@ import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { AddMemoryInput, AddMemoryResult, MemoryListOptions, MemoryRecord, MemoryScope, MemoryType } from './types.js';
+import { MEMORY_TYPES, type AddMemoryInput, type AddMemoryResult, type MemoryListOptions, type MemoryRecord, type MemoryScope, type MemoryType } from './types.js';
 import { defaultScopeForMemoryType } from './types.js';
 import { assertMemoryPolicy } from './MemoryPolicy.js';
+import { memoryAge, memoryFreshnessText } from './MemoryRecall.js';
 
 export interface MemoryStoreOptions {
   cwd?: string;
   globalDir?: string;
+}
+
+export interface MemoryStats {
+  enabled: boolean;
+  total: number;
+  global: number;
+  project: number;
+  byType: Record<MemoryType, number>;
+  manual: number;
+  auto: number;
+  latestUpdatedAt?: number;
+  latestAge?: string;
+  paths: Record<MemoryScope, string>;
 }
 
 interface MemoryEvent {
@@ -111,6 +125,42 @@ export class MemoryStore {
     return { global: this.globalPath, project: this.projectPath };
   }
 
+  async getStats(options: { enabled?: boolean; language?: 'zh-CN' | 'en-US' } = {}): Promise<MemoryStats> {
+    const records = await this.list({ includeArchived: false });
+    const byType = MEMORY_TYPES.reduce<Record<MemoryType, number>>((acc, type) => {
+      acc[type] = 0;
+      return acc;
+    }, {} as Record<MemoryType, number>);
+
+    let global = 0;
+    let project = 0;
+    let manual = 0;
+    let auto = 0;
+    let latestUpdatedAt: number | undefined;
+
+    for (const record of records) {
+      byType[record.type] += 1;
+      if (record.scope === 'global') global++;
+      else project++;
+      if (record.source === 'manual') manual++;
+      else auto++;
+      latestUpdatedAt = Math.max(latestUpdatedAt ?? 0, record.updatedAt);
+    }
+
+    return {
+      enabled: options.enabled ?? true,
+      total: records.length,
+      global,
+      project,
+      byType,
+      manual,
+      auto,
+      latestUpdatedAt,
+      latestAge: latestUpdatedAt ? memoryAge(latestUpdatedAt, options.language ?? 'zh-CN') : undefined,
+      paths: this.getPaths(),
+    };
+  }
+
   private async append(scope: MemoryScope, event: MemoryEvent): Promise<void> {
     const path = this.pathForScope(scope);
     await mkdir(dirname(path), { recursive: true });
@@ -157,7 +207,10 @@ export function renderMemoriesForPrompt(records: MemoryRecord[], language: 'zh-C
     lines.push('', `### ${type}`);
     for (const record of grouped[type] ?? []) {
       const tags = record.tags.length ? ` [${record.tags.join(', ')}]` : '';
-      lines.push(`- (${record.scope}/${record.source})${tags} ${record.content}`);
+      const age = memoryAge(record.updatedAt, language);
+      const freshness = memoryFreshnessText(record.updatedAt, language);
+      const suffix = freshness ? ` ${freshness}` : '';
+      lines.push(`- (${record.scope}/${record.source}, ${age})${tags} ${record.content}${suffix}`);
     }
   }
 

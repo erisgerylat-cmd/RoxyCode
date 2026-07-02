@@ -47,10 +47,11 @@ async function initMcp(language: Lang, args: string[]): Promise<void> {
   const force = args.includes('--force');
   const target = resolve(process.cwd(), '.roxycode', 'mcp.json');
   if (existsSync(target) && !force) {
-    console.log(chalk.yellow(`  ${language === 'zh-CN' ? 'MCP 配置已存在' : 'MCP config already exists'}: ${target}`));
-    console.log(chalk.dim(language === 'zh-CN' ? '  如需覆盖，请使用 /mcp init --force' : '  Use /mcp init --force to overwrite.'));
+    console.log(chalk.yellow(`  ${zh(language, 'MCP 配置已存在', 'MCP config already exists')}: ${target}`));
+    console.log(chalk.dim(zh(language, '  如需覆盖，请使用 /mcp init --force', '  Use /mcp init --force to overwrite.')));
     return;
   }
+
   await mkdir(resolve(process.cwd(), '.roxycode'), { recursive: true });
   await writeFile(target, `${JSON.stringify({
     mcpServers: {
@@ -64,10 +65,12 @@ async function initMcp(language: Lang, args: string[]): Promise<void> {
       },
     },
   }, null, 2)}\n`, 'utf8');
-  console.log(chalk.green(`  ${language === 'zh-CN' ? '已生成 MCP 配置模板' : 'MCP config template created'}: ${target}`));
-  console.log(chalk.dim(language === 'zh-CN'
-    ? '  把 enabled 改为 true 后，RoxyCode 会把 MCP tools 注册为 mcp__server__tool，并走统一权限确认。'
-    : '  Set enabled=true to register MCP tools as mcp__server__tool through the unified permission flow.'));
+  console.log(chalk.green(`  ${zh(language, '已生成 MCP 配置模板', 'MCP config template created')}: ${target}`));
+  console.log(chalk.dim(zh(
+    language,
+    '  将 enabled 改为 true 后，RoxyCode 会把 MCP tools 注册为 mcp__server__tool，并走统一权限确认。',
+    '  Set enabled=true to register MCP tools as mcp__server__tool through the unified permission flow.',
+  )));
 }
 
 async function listMcp(options: ExtensionCommandOptions, language: Lang): Promise<void> {
@@ -78,9 +81,10 @@ async function listMcp(options: ExtensionCommandOptions, language: Lang): Promis
   const adapter = new McpToolAdapter(process.cwd());
   const tools = await adapter.discoverTools(loadResult.servers);
   await adapter.close();
+
   console.log('');
-  console.log(chalk.bold(language === 'zh-CN' ? '  MCP 外部工具' : '  MCP external tools'));
-  if (loadResult.servers.length === 0) console.log(chalk.dim(language === 'zh-CN' ? '  暂无 MCP server。' : '  No MCP servers configured.'));
+  console.log(chalk.bold(zh(language, '  MCP 外部工具', '  MCP external tools')));
+  if (loadResult.servers.length === 0) console.log(chalk.dim(zh(language, '  暂无 MCP server。', '  No MCP servers configured.')));
   for (const server of loadResult.servers) {
     console.log(`  ${server.enabled === false ? chalk.dim('-') : chalk.green('*')} ${server.name} (${server.source}) ${server.command} ${(server.args ?? []).join(' ')}`);
   }
@@ -92,7 +96,7 @@ async function listMcp(options: ExtensionCommandOptions, language: Lang): Promis
 function printMcpPaths(options: ExtensionCommandOptions, language: Lang): void {
   const dirs = options.configManager.snapshot().mcp.directories;
   console.log('');
-  console.log(chalk.bold(language === 'zh-CN' ? '  MCP 配置路径' : '  MCP config paths'));
+  console.log(chalk.bold(zh(language, '  MCP 配置路径', '  MCP config paths')));
   for (const dir of dirs) console.log(`  ${dir}: ${resolve(process.cwd(), dir)}`);
   console.log(chalk.dim(`  ${resolve(process.cwd(), '.roxycode', 'mcp.json')}`));
   console.log('');
@@ -103,9 +107,10 @@ async function initHooks(language: Lang, args: string[]): Promise<void> {
   const dir = resolve(process.cwd(), '.roxycode', 'hooks');
   const target = join(dir, 'example.json');
   if (existsSync(target) && !force) {
-    console.log(chalk.yellow(`  ${language === 'zh-CN' ? 'Hooks 示例已存在' : 'Hooks example already exists'}: ${target}`));
+    console.log(chalk.yellow(`  ${zh(language, 'Hooks 示例已存在', 'Hooks example already exists')}: ${target}`));
     return;
   }
+
   await mkdir(dir, { recursive: true });
   await writeFile(target, `${JSON.stringify({
     hooks: [
@@ -127,6 +132,19 @@ async function initHooks(language: Lang, args: string[]): Promise<void> {
         command: 'node',
         args: ['scripts/check-command.js'],
         timeoutMs: 10000,
+        statusMessage: '运行本地命令安全检查',
+      },
+      {
+        id: 'tool-input-rewriter',
+        event: 'before_tool',
+        kind: 'command',
+        enabled: false,
+        blocking: false,
+        matcher: 'write_file',
+        command: 'node',
+        args: ['scripts/rewrite-tool-input.js'],
+        timeoutMs: 10000,
+        description: '脚本 stdout 可返回 JSON：{ "updatedInput": { ... }, "additionalContext": "..." }。修改后的输入仍会重新走参数校验和权限确认。',
       },
       {
         id: 'local-webhook',
@@ -136,6 +154,7 @@ async function initHooks(language: Lang, args: string[]): Promise<void> {
         blocking: false,
         url: 'http://localhost:3000/roxy-hook',
         allowInsecureHttp: true,
+        allowedEnvVars: [],
       },
       {
         id: 'review-agent-note',
@@ -146,7 +165,7 @@ async function initHooks(language: Lang, args: string[]): Promise<void> {
       },
     ],
   }, null, 2)}\n`, 'utf8');
-  console.log(chalk.green(`  ${language === 'zh-CN' ? '已生成 Hooks 示例' : 'Hooks example created'}: ${target}`));
+  console.log(chalk.green(`  ${zh(language, '已生成 Hooks 示例', 'Hooks example created')}: ${target}`));
 }
 
 async function listHooks(options: ExtensionCommandOptions, language: Lang): Promise<void> {
@@ -154,13 +173,15 @@ async function listHooks(options: ExtensionCommandOptions, language: Lang): Prom
   const pluginResult = await new PluginLoader({ cwd: process.cwd(), config }).load();
   const contributions = collectPluginContributions(pluginResult.enabled);
   const result = await new HookLoader({ cwd: process.cwd(), config, pluginHooks: contributions.hooks }).load();
+
   console.log('');
-  console.log(chalk.bold(language === 'zh-CN' ? '  Hooks 扩展点' : '  Hooks'));
-  if (result.hooks.length === 0) console.log(chalk.dim(language === 'zh-CN' ? '  暂无 Hooks。' : '  No hooks configured.'));
+  console.log(chalk.bold(zh(language, '  Hooks 扩展点', '  Hooks')));
+  if (result.hooks.length === 0) console.log(chalk.dim(zh(language, '  暂无 Hooks。', '  No hooks configured.')));
   for (const hook of result.hooks) {
     const marker = hook.enabled === false ? chalk.dim('-') : chalk.green('*');
     console.log(`  ${marker} ${hook.id.padEnd(24)} ${hook.event}/${hook.kind}${hook.blocking ? ' blocking' : ''}`);
     if (hook.description) console.log(chalk.dim(`      ${hook.description}`));
+    if (hook.statusMessage) console.log(chalk.dim(`      status: ${hook.statusMessage}`));
     if (hook.source) console.log(chalk.dim(`      ${hook.source}`));
   }
   printErrors(result.errors.map(error => `${error.path}: ${error.message}`));
@@ -170,7 +191,7 @@ async function listHooks(options: ExtensionCommandOptions, language: Lang): Prom
 function printHookPaths(options: ExtensionCommandOptions, language: Lang): void {
   const dirs = options.configManager.snapshot().hooks.directories;
   console.log('');
-  console.log(chalk.bold(language === 'zh-CN' ? '  Hooks 路径' : '  Hook paths'));
+  console.log(chalk.bold(zh(language, '  Hooks 路径', '  Hook paths')));
   for (const dir of dirs) console.log(`  ${dir}: ${resolve(process.cwd(), dir)}`);
   console.log('');
 }
@@ -181,10 +202,11 @@ async function initPlugin(language: Lang, args: string[]): Promise<void> {
   const dir = resolve(process.cwd(), '.roxycode', 'plugins', id);
   const target = join(dir, 'plugin.json');
   if (existsSync(target) && !force) {
-    console.log(chalk.yellow(`  ${language === 'zh-CN' ? '插件已存在' : 'Plugin already exists'}: ${target}`));
-    console.log(chalk.dim(language === 'zh-CN' ? '  如需覆盖，请使用 /plugin init <id> --force' : '  Use /plugin init <id> --force to overwrite.'));
+    console.log(chalk.yellow(`  ${zh(language, '插件已存在', 'Plugin already exists')}: ${target}`));
+    console.log(chalk.dim(zh(language, '  如需覆盖，请使用 /plugin init <id> --force', '  Use /plugin init <id> --force to overwrite.')));
     return;
   }
+
   await mkdir(dir, { recursive: true });
   await writeFile(target, `${JSON.stringify({
     id,
@@ -205,17 +227,17 @@ async function initPlugin(language: Lang, args: string[]): Promise<void> {
     workflows: [],
     characters: [],
   }, null, 2)}\n`, 'utf8');
-  console.log(chalk.green(`  ${language === 'zh-CN' ? '已生成插件模板' : 'Plugin template created'}: ${target}`));
-  console.log(chalk.dim(language === 'zh-CN' ? `  命令会注册为 /${id}:review-style` : `  Command will be registered as /${id}:review-style`));
+  console.log(chalk.green(`  ${zh(language, '已生成插件模板', 'Plugin template created')}: ${target}`));
+  console.log(chalk.dim(zh(language, `  命令会注册为 /${id}:review-style`, `  Command will be registered as /${id}:review-style`)));
 }
 
 async function listPlugins(options: ExtensionCommandOptions, language: Lang): Promise<void> {
   const result = await new PluginLoader({ cwd: process.cwd(), config: options.configManager.snapshot() }).load();
   console.log('');
-  console.log(chalk.bold(language === 'zh-CN' ? '  RoxyCode 插件' : '  RoxyCode plugins'));
+  console.log(chalk.bold(zh(language, '  RoxyCode 插件', '  RoxyCode plugins')));
   for (const plugin of result.enabled) console.log(`  ${chalk.green('*')} ${plugin.id} ${plugin.version} - ${plugin.description ?? plugin.name}`);
   for (const plugin of result.disabled) console.log(`  ${chalk.dim('-')} ${plugin.id} ${plugin.version} - ${plugin.description ?? plugin.name}`);
-  if (result.enabled.length + result.disabled.length === 0) console.log(chalk.dim(language === 'zh-CN' ? '  暂无插件。' : '  No plugins found.'));
+  if (result.enabled.length + result.disabled.length === 0) console.log(chalk.dim(zh(language, '  暂无插件。', '  No plugins found.')));
   printErrors(result.errors.map(error => `${error.path}: ${error.message}`));
   console.log('');
 }
@@ -223,7 +245,7 @@ async function listPlugins(options: ExtensionCommandOptions, language: Lang): Pr
 function printPluginPaths(options: ExtensionCommandOptions, language: Lang): void {
   const dirs = options.configManager.snapshot().plugins.directories;
   console.log('');
-  console.log(chalk.bold(language === 'zh-CN' ? '  插件路径' : '  Plugin paths'));
+  console.log(chalk.bold(zh(language, '  插件路径', '  Plugin paths')));
   for (const dir of dirs) console.log(`  ${dir}: ${resolve(process.cwd(), dir)}`);
   console.log('');
 }
@@ -231,10 +253,10 @@ function printPluginPaths(options: ExtensionCommandOptions, language: Lang): voi
 async function validatePlugins(options: ExtensionCommandOptions, language: Lang): Promise<void> {
   const result = await new PluginLoader({ cwd: process.cwd(), config: options.configManager.snapshot() }).load();
   if (result.errors.length === 0) {
-    console.log(chalk.green(language === 'zh-CN' ? '  插件校验通过。' : '  Plugin validation passed.'));
+    console.log(chalk.green(zh(language, '  插件校验通过。', '  Plugin validation passed.')));
     return;
   }
-  console.log(chalk.yellow(language === 'zh-CN' ? '  插件校验发现问题：' : '  Plugin validation warnings:'));
+  console.log(chalk.yellow(zh(language, '  插件校验发现问题：', '  Plugin validation warnings:')));
   printErrors(result.errors.map(error => `${error.path}: ${error.message}`));
 }
 
@@ -245,17 +267,21 @@ function printErrors(errors: string[]): void {
 }
 
 function printMcpUsage(language: Lang): void {
-  console.log(chalk.dim(language === 'zh-CN' ? '  用法: /mcp [list|init|paths]' : '  Usage: /mcp [list|init|paths]'));
+  console.log(chalk.dim(zh(language, '  用法: /mcp [list|init|paths]', '  Usage: /mcp [list|init|paths]')));
 }
 
 function printHooksUsage(language: Lang): void {
-  console.log(chalk.dim(language === 'zh-CN' ? '  用法: /hooks [list|init|paths]' : '  Usage: /hooks [list|init|paths]'));
+  console.log(chalk.dim(zh(language, '  用法: /hooks [list|init|paths]', '  Usage: /hooks [list|init|paths]')));
 }
 
 function printPluginUsage(language: Lang): void {
-  console.log(chalk.dim(language === 'zh-CN' ? '  用法: /plugin [list|init|validate|paths]' : '  Usage: /plugin [list|init|validate|paths]'));
+  console.log(chalk.dim(zh(language, '  用法: /plugin [list|init|validate|paths]', '  Usage: /plugin [list|init|validate|paths]')));
 }
 
 function normalizeId(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'my-roxy-plugin';
+}
+
+function zh(language: Lang, zhText: string, enText: string): string {
+  return language === 'zh-CN' ? zhText : enText;
 }

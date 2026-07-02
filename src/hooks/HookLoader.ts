@@ -94,7 +94,9 @@ function normalizeHook(raw: unknown, path: string, index: number): RoxyHookDefin
     url: asString(raw.url),
     method: 'POST',
     headers: normalizeHeaders(raw.headers),
+    allowedEnvVars: asStringArray(raw.allowedEnvVars ?? raw.allowed_env_vars),
     allowInsecureHttp: asBoolean(raw.allowInsecureHttp ?? raw.allow_insecure_http),
+    statusMessage: asString(raw.statusMessage ?? raw.status_message),
     source: path,
   };
 }

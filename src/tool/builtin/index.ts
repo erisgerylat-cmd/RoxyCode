@@ -1,4 +1,5 @@
 import type { Tool } from '../types.js';
+import { withToolDefaults } from '../builder/ToolBuilder.js';
 import { editFileTool } from './editFile.js';
 import { executeCommandTool } from './executeCommand.js';
 import { gitTool } from './git.js';
@@ -17,12 +18,59 @@ export { writeFileTool } from './writeFile.js';
 
 export function getBuiltinTools(): Tool[] {
   return [
-    readFileTool,
-    writeFileTool,
-    editFileTool,
-    listDirectoryTool,
-    grepSearchTool,
-    executeCommandTool,
-    gitTool,
+    withToolDefaults(readFileTool, {
+      aliases: ['read', 'cat'],
+      searchHint: 'read project text files with line ranges',
+      maxResultSizeChars: Infinity,
+      concurrency: 'safe',
+      interruptBehavior: 'cancel',
+    }),
+    withToolDefaults(writeFileTool, {
+      aliases: ['write'],
+      searchHint: 'create or overwrite project files',
+      maxResultSizeChars: 20_000,
+      strict: true,
+      concurrency: 'exclusive',
+      interruptBehavior: 'block',
+    }),
+    withToolDefaults(editFileTool, {
+      aliases: ['edit', 'replace'],
+      searchHint: 'replace exact text in project files',
+      maxResultSizeChars: 20_000,
+      strict: true,
+      concurrency: 'exclusive',
+      interruptBehavior: 'block',
+    }),
+    withToolDefaults(listDirectoryTool, {
+      aliases: ['ls', 'list'],
+      searchHint: 'list project directories and file names',
+      maxResultSizeChars: 40_000,
+      concurrency: 'safe',
+      interruptBehavior: 'cancel',
+    }),
+    withToolDefaults(grepSearchTool, {
+      aliases: ['grep', 'search'],
+      searchHint: 'search project files for text or regex matches',
+      maxResultSizeChars: 50_000,
+      shouldDefer: true,
+      concurrency: 'safe',
+      interruptBehavior: 'cancel',
+    }),
+    withToolDefaults(executeCommandTool, {
+      aliases: ['bash', 'shell', 'powershell'],
+      searchHint: 'run local shell commands in the workspace',
+      maxResultSizeChars: 40_000,
+      strict: true,
+      concurrency: 'exclusive',
+      interruptBehavior: 'block',
+    }),
+    withToolDefaults(gitTool, {
+      aliases: ['git_status'],
+      searchHint: 'inspect git status diff log and branches',
+      maxResultSizeChars: 50_000,
+      shouldDefer: true,
+      concurrency: 'safe',
+      interruptBehavior: 'cancel',
+    }),
   ];
 }

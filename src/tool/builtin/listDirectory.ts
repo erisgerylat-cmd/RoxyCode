@@ -1,8 +1,9 @@
-﻿import { readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Tool } from '../types.js';
 import { formatToolResult } from '../executor/ToolExecutor.js';
 import { okBody, optionalNumberArg, optionalStringArg, resolveToolPath, stringArg } from '../utils/args.js';
+import { throwIfAborted } from '../utils/abort.js';
 
 export const listDirectoryTool: Tool = {
   definition: {
@@ -18,6 +19,8 @@ export const listDirectoryTool: Tool = {
   },
   isReadOnly: true,
   riskLevel: 'low',
+  concurrency: 'safe',
+  interruptBehavior: 'cancel',
   getAffectedPaths(args, ctx) {
     return [resolveToolPath(ctx, optionalStringArg(args, 'path') ?? '.')];
   },
@@ -25,9 +28,12 @@ export const listDirectoryTool: Tool = {
     const started = Date.now();
     const path = resolveToolPath(ctx, optionalStringArg(args, 'path') ?? '.');
     const maxEntries = Math.max(1, optionalNumberArg(args, 'max_entries') ?? 200);
+    throwIfAborted(ctx);
     const entries = await readdir(path, { withFileTypes: true });
+    throwIfAborted(ctx);
     const selected = entries.slice(0, maxEntries);
     const lines = await Promise.all(selected.map(async entry => {
+      throwIfAborted(ctx);
       const full = join(path, entry.name);
       const info = await stat(full).catch(() => null);
       const kind = entry.isDirectory() ? 'dir ' : entry.isFile() ? 'file' : 'node';

@@ -2,10 +2,11 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Language } from '../../i18n/index.js';
-import { MemoryStore, renderMemoriesForPrompt, type MemoryRecord } from '../../session/memory/index.js';
+import { MemoryStore, renderMemoriesForPrompt, selectRelevantMemories, type MemoryRecord } from '../../session/memory/index.js';
 import { WorkflowLoader, type WorkflowDefinition } from '../../workflow/index.js';
 
 export interface RuntimeContextOptions {
+  query?: string;
   workflows?: {
     builtin?: boolean;
     directories?: string[];
@@ -31,11 +32,17 @@ export async function loadRuntimeContext(cwd: string = process.cwd(), options: R
     readTextIfExists(join(cwd, 'ROXY.md'), 16_000),
     readJsonIfExists(join(cwd, '.roxycode', 'project.json')),
     readJsonIfExists(join(cwd, '.roxycode', 'profile.json')),
-    memoryStore.list({ limit: 24 }),
+    memoryStore.list({ limit: 100 }),
     workflowLoader.load().catch(() => ({ workflows: [] as WorkflowDefinition[] })),
   ]);
 
-  return { roxyMd, projectJson, profile, memories, workflows: workflowResult.workflows };
+  return {
+    roxyMd,
+    projectJson,
+    profile,
+    memories: options.query ? selectRelevantMemories(options.query, memories, { limit: 5 }) : memories.slice(0, 5),
+    workflows: workflowResult.workflows,
+  };
 }
 
 export function renderRuntimeContext(snapshot: RuntimeContextSnapshot, language: Language): string | null {

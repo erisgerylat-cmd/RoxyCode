@@ -9,7 +9,7 @@
  * API 文档: https://platform.deepseek.com/api-docs
  */
 
-import { BaseLLMProvider } from './BaseLLMProvider.js';
+import { BaseLLMProvider, type RetryConfig } from './BaseLLMProvider.js';
 import type { LLMProviderConfig } from '../../core/types/llm.js';
 
 /** DeepSeek 2026 模型上下文长度表 */
@@ -36,8 +36,8 @@ export class DeepSeekProvider extends BaseLLMProvider {
   readonly supportsTools = true;
   readonly maxContextTokens: number;
 
-  constructor(config: LLMProviderConfig) {
-    super(config);
+  constructor(config: LLMProviderConfig, retry?: Partial<RetryConfig>) {
+    super(config, retry);
     const modelInfo = DEEPSEEK_MODELS[config.model];
     this.maxContextTokens = modelInfo?.maxContextTokens ?? DEFAULT_MAX_CONTEXT;
   }

@@ -1,21 +1,38 @@
-﻿export type {
+export type {
   Tool,
   ToolAuditRecord,
+  ToolConcurrency,
   ToolDefinition,
   ToolExecutionContext,
   ToolInvocation,
+  ToolInterruptBehavior,
   ToolParameterProperty,
   ToolParameterSchema,
+  PermissionClassification,
+  PermissionClassificationSource,
   ToolPermissionDecision,
+  ToolPermissionDecisionReason,
   ToolPermissionMode,
   ToolPermissionPrompt,
   ToolRiskLevel,
 } from './types.js';
 export { ToolRegistry } from './registry/ToolRegistry.js';
 export { PermissionGuard } from './permission/PermissionGuard.js';
+export { PermissionClassifier } from './permission/PermissionClassifier.js';
+export {
+  DENIAL_LIMITS,
+  createDenialTrackingState,
+  recordDenial,
+  recordSuccess,
+  shouldFallbackToPrompting,
+} from './permission/DenialTracking.js';
+export type { DenialTrackingState } from './permission/DenialTracking.js';
 export { ToolExecutor, formatToolResult } from './executor/ToolExecutor.js';
 export { AuditLog } from './audit/AuditLog.js';
+export { buildTool, withToolDefaults, DEFAULT_MAX_RESULT_SIZE_CHARS } from './builder/ToolBuilder.js';
 export { getBuiltinTools } from './builtin/index.js';
+export { processToolResultSize } from './storage/ToolResultStorage.js';
+export type { PersistedToolResult } from './storage/ToolResultStorage.js';
 export {
   readFileTool,
   writeFileTool,

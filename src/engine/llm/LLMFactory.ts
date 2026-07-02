@@ -33,8 +33,9 @@ export class LLMFactory {
     const providerId = normalizeProviderId((configManager.get('llm.provider') as string) || 'qwen');
     const defaultModel = DEFAULT_MODELS[providerId] || 'qwen-max';
     const model = (configManager.get('llm.model') as string) || defaultModel;
-    const apiKey = (configManager.get('llm.apiKey') as string) || readApiKeyFromEnv(providerId) || '';
-    const baseUrl = (configManager.get('llm.baseUrl') as string) || readBaseUrlFromEnv(providerId) || undefined;
+    const apiKey = (configManager.get('llm.apiKey') as string) || '';
+    const baseUrl = (configManager.get('llm.baseUrl') as string) || undefined;
+    const fallbackModels = readFallbackModels(configManager.get('llm.fallbackModels'));
 
     const ProviderClass = PROVIDER_REGISTRY[providerId];
     if (!ProviderClass) {
@@ -44,7 +45,7 @@ export class LLMFactory {
       );
     }
 
-    return new ProviderClass({ apiKey, model, baseUrl });
+    return new ProviderClass({ apiKey, model, baseUrl, fallbackModels });
   }
 
   static getAvailableProviders(): string[] {
@@ -62,28 +63,14 @@ export class LLMFactory {
   }
 }
 
+function readFallbackModels(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter(item => typeof item === 'string' && item.trim()).map(item => item.trim()) : [];
+}
+
 function normalizeProviderId(value: string): string {
   const normalized = value.trim().toLowerCase();
   if (normalized === 'aliyun' || normalized === 'tongyi') return 'qwen';
   if (normalized === 'zhipu' || normalized === 'bigmodel') return 'glm';
   if (normalized === 'openai-compatible' || normalized === 'openai_compatible') return 'compatible';
   return normalized;
-}
-
-function readApiKeyFromEnv(providerId: string): string | undefined {
-  const env = process.env;
-  if (providerId === 'qwen' || providerId === 'dashscope') return env.ROXY_QWEN_API_KEY || env.DASHSCOPE_API_KEY || env.QWEN_API_KEY;
-  if (providerId === 'deepseek') return env.ROXY_DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY;
-  if (providerId === 'glm' || providerId === 'bigmodel') return env.ROXY_GLM_API_KEY || env.BIGMODEL_API_KEY || env.GLM_API_KEY;
-  if (providerId === 'openai' || providerId === 'compatible') return env.ROXY_OPENAI_API_KEY || env.OPENAI_API_KEY;
-  return env.ROXY_API_KEY;
-}
-
-function readBaseUrlFromEnv(providerId: string): string | undefined {
-  const env = process.env;
-  if (providerId === 'qwen' || providerId === 'dashscope') return env.ROXY_QWEN_BASE_URL || env.DASHSCOPE_BASE_URL;
-  if (providerId === 'deepseek') return env.ROXY_DEEPSEEK_BASE_URL || env.DEEPSEEK_BASE_URL;
-  if (providerId === 'glm' || providerId === 'bigmodel') return env.ROXY_GLM_BASE_URL || env.BIGMODEL_BASE_URL;
-  if (providerId === 'openai' || providerId === 'compatible') return env.ROXY_OPENAI_BASE_URL || env.OPENAI_BASE_URL;
-  return env.ROXY_BASE_URL;
 }

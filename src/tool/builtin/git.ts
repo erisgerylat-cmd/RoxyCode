@@ -1,4 +1,4 @@
-﻿import type { Tool } from '../types.js';
+import type { Tool } from '../types.js';
 import { formatToolResult } from '../executor/ToolExecutor.js';
 import { okBody, optionalStringArg } from '../utils/args.js';
 import { runCommand } from '../utils/process.js';
@@ -18,6 +18,12 @@ export const gitTool: Tool = {
   },
   isReadOnly: true,
   riskLevel: 'low',
+  concurrency: 'safe',
+  interruptBehavior: 'cancel',
+  isConcurrencySafe(args) {
+    const operation = optionalStringArg(args, 'operation') ?? 'status';
+    return ['status', 'diff', 'log', 'branch'].includes(operation);
+  },
   async execute(args, ctx) {
     const started = Date.now();
     const operation = optionalStringArg(args, 'operation') ?? 'status';

@@ -32,6 +32,11 @@ export async function handleMemoryCommand(args: string[], options: MemoryCommand
     return;
   }
 
+  if (action === 'stats' || action === 'status') {
+    await printStats(store, options, language);
+    return;
+  }
+
   if (action === 'types') {
     printTypes(language);
     return;
@@ -126,6 +131,26 @@ async function listMemories(store: MemoryStore, args: string[], language: Lang):
     console.log(`  ${chalk.cyan(record.id)} ${chalk.dim(`${record.scope}/${record.type}/${record.source}`)}${tags}`);
     console.log(`    ${record.content}`);
   }
+  console.log('');
+}
+
+async function printStats(store: MemoryStore, options: MemoryCommandOptions, language: Lang): Promise<void> {
+  const stats = await store.getStats({ enabled: options.configManager.get('memory.auto') !== false, language });
+  const enabled = stats.enabled
+    ? (language === 'zh-CN' ? zh('enabled') : 'enabled')
+    : (language === 'zh-CN' ? zh('disabled') : 'disabled');
+  const typeSummary = Object.entries(stats.byType)
+    .filter(([, count]) => count > 0)
+    .map(([type, count]) => `${type}=${count}`)
+    .join(', ');
+
+  console.log('');
+  console.log(chalk.bold(language === 'zh-CN' ? zh('statsTitle') : 'Memory statistics'));
+  console.log(`  ${language === 'zh-CN' ? zh('autoStatus') : 'Auto memory'}: ${enabled}`);
+  console.log(`  total=${stats.total} / global=${stats.global} / project=${stats.project} / manual=${stats.manual} / auto=${stats.auto}`);
+  console.log(`  ${language === 'zh-CN' ? zh('typeDistribution') : 'Type distribution'}: ${typeSummary || 'empty'}`);
+  if (stats.latestAge) console.log(`  ${language === 'zh-CN' ? zh('latestMemory') : 'Latest memory'}: ${stats.latestAge}`);
+  console.log(chalk.dim(`  ${language === 'zh-CN' ? zh('claudeReference') : 'Claude Code reference'}: status/doctor style visibility for memory health.`));
   console.log('');
 }
 
@@ -299,7 +324,7 @@ function printUsage(language: Lang): void {
   if (language === 'zh-CN') {
     console.log(chalk.dim(`  ${zh('usage')}`));
   } else {
-    console.log(chalk.dim('  Usage: /memory [list|types|policy|paths] | /memory add <type> [--scope global|project] [--tag a,b] <content> | /memory forget <id> | /memory auto [status|on|off]'));
+    console.log(chalk.dim('  Usage: /memory [list|stats|types|policy|paths] | /memory add <type> [--scope global|project] [--tag a,b] <content> | /memory forget <id> | /memory auto [status|on|off]'));
   }
 }
 
@@ -320,6 +345,10 @@ function formatError(key: ErrorKey, language: Lang): string {
 
 type ZhKey =
   | 'usage'
+  | 'statsTitle'
+  | 'typeDistribution'
+  | 'latestMemory'
+  | 'claudeReference'
   | 'missingId'
   | 'forgot'
   | 'notFound'
@@ -349,7 +378,11 @@ type ZhKey =
   | ErrorKey;
 
 const ZH: Record<ZhKey, string> = {
-  usage: '/memory [list|types|policy|paths] | /memory add <type> [--scope global|project] [--tag a,b] <content> | /memory forget <id> | /memory auto [status|on|off]',
+  usage: '/memory [list|stats|types|policy|paths] | /memory add <type> [--scope global|project] [--tag a,b] <content> | /memory forget <id> | /memory auto [status|on|off]',
+  statsTitle: 'RoxyCode \u8bb0\u5fc6\u7edf\u8ba1',
+  typeDistribution: '\u7c7b\u578b\u5206\u5e03',
+  latestMemory: '\u6700\u8fd1\u8bb0\u5fc6',
+  claudeReference: '\u5bf9\u7167 Claude Code',
   missingId: '\u8bf7\u63d0\u4f9b\u8bb0\u5fc6 ID\u3002',
   forgot: '\u5df2\u5fd8\u8bb0',
   notFound: '\u672a\u627e\u5230',

@@ -1,5 +1,6 @@
-﻿import { spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import type { ToolExecutionContext } from '../types.js';
+import { throwIfAborted } from './abort.js';
 
 export interface CommandOutput {
   command: string;
@@ -7,10 +8,18 @@ export interface CommandOutput {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  aborted?: boolean;
 }
 
 export function runCommand(command: string, args: string[], ctx: ToolExecutionContext, options: { timeoutMs?: number } = {}): Promise<CommandOutput> {
   return new Promise((resolve, reject) => {
+    try {
+      throwIfAborted(ctx);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
     const timeoutMs = options.timeoutMs ?? 30_000;
     const child = spawn(command, args, {
       cwd: ctx.cwd,
@@ -22,24 +31,36 @@ export function runCommand(command: string, args: string[], ctx: ToolExecutionCo
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let aborted = false;
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      ctx.signal?.removeEventListener('abort', onAbort);
+    };
+
+    const onAbort = () => {
+      aborted = true;
+      child.kill('SIGTERM');
+    };
 
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
     }, timeoutMs);
 
-    ctx.signal?.addEventListener('abort', () => {
-      child.kill('SIGTERM');
-    }, { once: true });
+    ctx.signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', chunk => { stdout += chunk; });
     child.stderr.on('data', chunk => { stderr += chunk; });
-    child.on('error', reject);
+    child.on('error', error => {
+      cleanup();
+      reject(error);
+    });
     child.on('close', exitCode => {
-      clearTimeout(timer);
-      resolve({ command: [command, ...args].join(' '), exitCode, stdout, stderr, timedOut });
+      cleanup();
+      resolve({ command: [command, ...args].join(' '), exitCode, stdout, stderr, timedOut, aborted });
     });
   });
 }

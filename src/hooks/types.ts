@@ -26,7 +26,9 @@ export interface RoxyHookDefinition {
   url?: string;
   method?: 'POST';
   headers?: Record<string, string>;
+  allowedEnvVars?: string[];
   allowInsecureHttp?: boolean;
+  statusMessage?: string;
   source?: string;
   pluginId?: string;
 }
@@ -54,6 +56,29 @@ export interface HookExecutionRecord {
   duration: number;
   message?: string;
   additionalContext?: string;
+  exitCode?: number | null;
+  timedOut?: boolean;
+  stdout?: string;
+  stderr?: string;
+  source?: string;
+  statusMessage?: string;
+}
+
+export interface HookProtocolOutput {
+  continue?: boolean;
+  suppressOutput?: boolean;
+  stopReason?: string;
+  decision?: 'approve' | 'block';
+  reason?: string;
+  systemMessage?: string;
+  additionalContext?: string;
+  updatedInput?: Record<string, unknown>;
+  hookSpecificOutput?: {
+    additionalContext?: string;
+    updatedInput?: Record<string, unknown>;
+    permissionDecision?: 'allow' | 'deny' | 'ask' | 'passthrough';
+    permissionDecisionReason?: string;
+  };
 }
 
 export interface HookRunResult {

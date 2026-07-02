@@ -15,7 +15,7 @@ import chalk from 'chalk';
 import { basename } from 'node:path';
 import type { Character } from '../../aesthetic/character/types.js';
 
-type StatusState = 'thinking' | 'analyzing' | 'planning' | 'executing' | 'searching' | 'waiting' | 'done' | 'error' | 'tool';
+export type StatusState = 'thinking' | 'analyzing' | 'planning' | 'executing' | 'searching' | 'waiting' | 'done' | 'error' | 'tool';
 
 /** 动画帧序列 */
 const ANIMATION_FRAMES: Record<StatusState, string[]> = {
@@ -58,6 +58,11 @@ export class StatusBar {
   start(): void {
     this.startTime = Date.now();
     this.currentState = 'thinking';
+    this.currentLabel = '';
+    this.currentTool = '';
+    this.inputTokens = 0;
+    this.outputTokens = 0;
+    this.cost = null;
     this.animationFrame = 0;
     this.isStreaming = false;
     this.lastOutputLength = 0;
@@ -75,6 +80,16 @@ export class StatusBar {
   setState(state: StatusState): void {
     this.currentState = state;
     this.animationFrame = 0;
+  }
+
+  /** 设置自定义状态文案 */
+  setLabel(label: string): void {
+    this.currentLabel = label;
+  }
+
+  /** 当前是否正在刷新 */
+  isActive(): boolean {
+    return this.timer !== null;
   }
 
   /** 设置成本 */
@@ -129,6 +144,18 @@ export class StatusBar {
     this.currentTool = '';
   }
 
+  /** 停止刷新并清除当前状态行，不输出完成信息 */
+  clear(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    this.isStreaming = false;
+    this.currentLabel = '';
+    this.currentTool = '';
+    process.stdout.write('\r\x1b[K');
+  }
+
   /** 刷新显示 */
   private refresh(): void {
     const elapsed = this.formatElapsed(Date.now() - this.startTime);
@@ -164,7 +191,7 @@ export class StatusBar {
 
   /** 获取当前标签 */
   private getLabel(): string {
-    if (this.currentState === 'tool' && this.currentLabel) {
+    if (this.currentLabel) {
       return this.currentLabel;
     }
     const text = this.character.statusText;

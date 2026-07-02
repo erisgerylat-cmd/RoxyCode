@@ -1,13 +1,16 @@
 
+import { RoxyError, type RoxyErrorCategory, type RoxyRecoveryAction } from '../../core/errors.js';
 import type {
   LLMProvider,
   LLMProviderConfig,
   LLMCallOptions,
   LLMChunk,
   LLMUsage,
+  LLMToolChoice,
 } from '../../core/types/llm.js';
 import type { Message, ToolCall, MessageContent } from '../../core/types/message.js';
 import type { ToolDefinition } from '../../core/types/tool.js';
+import { normalizeToolResultPairing } from './ToolResultPairing.js';
 
 interface OpenAIMessage {
   role: string;
@@ -27,10 +30,16 @@ interface OpenAITool {
   function: { name: string; description: string; parameters: Record<string, unknown> };
 }
 
+interface OpenAIToolChoiceFunction {
+  type: 'function';
+  function: { name: string };
+}
+
 interface ChatCompletionRequest {
   model: string;
   messages: OpenAIMessage[];
   tools?: OpenAITool[];
+  tool_choice?: 'auto' | 'none' | OpenAIToolChoiceFunction;
   stream?: boolean;
   temperature?: number;
   top_p?: number;
@@ -44,10 +53,22 @@ interface ChatCompletionResponse {
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }
 
-interface RetryConfig {
+export interface RetryConfig {
   maxRetries: number;
   baseDelayMs: number;
   maxDelayMs: number;
+}
+
+export interface LLMErrorDetails {
+  statusCode?: number;
+  requestId?: string;
+  retryAfterMs?: number;
+  providerId?: string;
+  model?: string;
+  fallbackModel?: string;
+  fallbackModels?: string[];
+  attempt?: number;
+  maxRetries?: number;
 }
 
 const DEFAULT_RETRY: RetryConfig = { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 10000 };
@@ -74,7 +95,7 @@ export abstract class BaseLLMProvider implements LLMProvider {
     this.assertConfigured();
     const body = this.buildRequest(options, true);
     const response = await this.fetchWithRetry(body, options.signal);
-    if (!response.body) throw new LLMError('Response body is null', 'NETWORK_ERROR');
+    if (!response.body) throw this.createError('Response body is null', 'NETWORK_ERROR');
     yield* this.parseSSEStream(response.body, options.signal);
   }
 
@@ -82,9 +103,17 @@ export abstract class BaseLLMProvider implements LLMProvider {
     this.assertConfigured();
     const body = this.buildRequest(options, false);
     const response = await this.fetchWithRetry(body, options.signal);
-    const data = (await response.json()) as ChatCompletionResponse;
+    let data: ChatCompletionResponse;
+    try {
+      data = (await response.json()) as ChatCompletionResponse;
+    } catch (err) {
+      throw this.createError(
+        `Invalid JSON response from provider: ${formatUnknownError(err)}`,
+        'API_ERROR',
+      );
+    }
     const choice = data.choices?.[0];
-    if (!choice) throw new LLMError('No choices in response', 'API_ERROR');
+    if (!choice) throw this.createError('No choices in response', 'API_ERROR');
     return { text: choice.message?.content ?? '', usage: this.parseUsage(data.usage) };
   }
 
@@ -115,7 +144,7 @@ export abstract class BaseLLMProvider implements LLMProvider {
   protected buildRequest(options: LLMCallOptions, stream: boolean): ChatCompletionRequest {
     const request: ChatCompletionRequest = {
       model: this.config.model,
-      messages: this.convertMessages(options.messages),
+      messages: this.convertMessages(normalizeToolResultPairing(options.messages)),
       stream,
       temperature: options.temperature ?? this.config.temperature ?? 0.7,
       top_p: options.topP ?? this.config.topP,
@@ -124,6 +153,7 @@ export abstract class BaseLLMProvider implements LLMProvider {
     if (stream) request.stream_options = { include_usage: true };
     if (options.tools && options.tools.length > 0 && this.supportsTools) {
       request.tools = this.convertTools(options.tools);
+      if (options.toolChoice) request.tool_choice = this.convertToolChoice(options.toolChoice);
     }
     return request;
   }
@@ -170,6 +200,11 @@ export abstract class BaseLLMProvider implements LLMProvider {
     }));
   }
 
+  protected convertToolChoice(choice: LLMToolChoice): 'auto' | 'none' | OpenAIToolChoiceFunction {
+    if (choice === 'auto' || choice === 'none') return choice;
+    return { type: 'function', function: { name: choice.name } };
+  }
+
   protected parseUsage(usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }): LLMUsage {
     return {
       inputTokens: usage?.prompt_tokens ?? 0,
@@ -188,7 +223,7 @@ export abstract class BaseLLMProvider implements LLMProvider {
 
     try {
       while (true) {
-        if (signal?.aborted) throw new LLMError('Request aborted', 'ABORTED');
+        if (signal?.aborted) throw this.createError('Request aborted', 'ABORTED');
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -204,7 +239,7 @@ export abstract class BaseLLMProvider implements LLMProvider {
             return;
           }
           const chunk = safeParseObject(payload);
-          if (!chunk) continue;
+          if (!chunk) throw this.createError('Invalid SSE JSON payload from provider', 'API_ERROR');
           if (isRecord(chunk.usage)) finalUsage = this.parseUsage(chunk.usage as { prompt_tokens: number; completion_tokens: number; total_tokens: number });
           const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
           if (isRecord(choice) && typeof choice.finish_reason === 'string') finishReason = choice.finish_reason;
@@ -238,33 +273,62 @@ export abstract class BaseLLMProvider implements LLMProvider {
         }
       }
       yield { type: 'done', usage: finalUsage, toolCalls: finalizeToolCalls(pendingToolCalls), finishReason };
+    } catch (err) {
+      if (err instanceof LLMError) throw err;
+      if (isAbortLike(err) || signal?.aborted) throw this.createError('Request aborted', 'ABORTED');
+      throw this.createError(`Stream error from provider: ${formatUnknownError(err)}`, 'NETWORK_ERROR');
     } finally {
       reader.releaseLock();
     }
   }
 
   private async fetchWithRetry(body: ChatCompletionRequest, signal?: AbortSignal): Promise<Response> {
-    let lastError: Error | undefined;
+    let lastError: LLMError | undefined;
+    let nextRetryAfterMs: number | undefined;
     for (let attempt = 0; attempt <= this.retry.maxRetries; attempt++) {
       try {
         if (attempt > 0) {
-          const delay = Math.min(this.retry.baseDelayMs * Math.pow(2, attempt - 1), this.retry.maxDelayMs);
-          await sleep(delay);
+          const exponentialDelay = Math.min(this.retry.baseDelayMs * Math.pow(2, attempt - 1), this.retry.maxDelayMs);
+          const delay = nextRetryAfterMs === undefined ? exponentialDelay : Math.min(nextRetryAfterMs, this.retry.maxDelayMs);
+          nextRetryAfterMs = undefined;
+          if (delay > 0) await sleep(delay);
         }
         const response = await this.fetchRaw(body, signal);
         if (response.ok) return response;
         const errorText = await response.text().catch(() => 'Unknown error');
         const statusCode = response.status;
-        if (statusCode >= 400 && statusCode < 500 && statusCode !== 429) {
-          throw new LLMError(`API error ${statusCode}: ${errorText.slice(0, 500)}`, 'API_ERROR', statusCode);
-        }
-        lastError = new LLMError(`HTTP ${statusCode}: ${errorText.slice(0, 500)}`, statusCode === 429 ? 'RATE_LIMIT' : 'SERVER_ERROR', statusCode);
+        const code = classifyHttpStatus(statusCode);
+        const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
+        const requestId = extractRequestId(response.headers, errorText);
+        const error = this.createError(
+          `Provider HTTP ${statusCode}: ${trimProviderError(errorText)}`,
+          code,
+          {
+            statusCode,
+            requestId,
+            retryAfterMs,
+            attempt: attempt + 1,
+            maxRetries: this.retry.maxRetries,
+          },
+        );
+        if (!isRetryableHttpStatus(statusCode)) throw error;
+        lastError = error;
+        nextRetryAfterMs = retryAfterMs;
       } catch (err) {
-        if (err instanceof LLMError && (err.code === 'API_ERROR' || err.code === 'ABORTED')) throw err;
-        lastError = err instanceof Error ? err : new Error(String(err));
+        if (err instanceof LLMError) {
+          if (!isRetryableLLMError(err)) throw err;
+          lastError = err;
+          nextRetryAfterMs = err.retryAfterMs;
+          continue;
+        }
+        if (isAbortLike(err) || signal?.aborted) throw this.createError('Request aborted', 'ABORTED');
+        lastError = this.createError(`Network error from provider: ${formatUnknownError(err)}`, 'NETWORK_ERROR', {
+          attempt: attempt + 1,
+          maxRetries: this.retry.maxRetries,
+        });
       }
     }
-    throw lastError ?? new LLMError('Unknown error after retries', 'NETWORK_ERROR');
+    throw lastError ?? this.createError('Unknown error after retries', 'NETWORK_ERROR');
   }
 
   private async fetchRaw(body: ChatCompletionRequest, signal?: AbortSignal): Promise<Response> {
@@ -277,25 +341,153 @@ export abstract class BaseLLMProvider implements LLMProvider {
     });
   }
 
+  private createError(message: string, code: LLMErrorCode, details: Partial<LLMErrorDetails> = {}): LLMError {
+    return new LLMError(message, code, this.buildErrorDetails(details));
+  }
+
+  private buildErrorDetails(details: Partial<LLMErrorDetails> = {}): LLMErrorDetails {
+    const fallbackModels = this.config.fallbackModels?.filter(Boolean) ?? [];
+    return {
+      providerId: this.id,
+      model: this.config.model,
+      ...(fallbackModels.length > 0 ? { fallbackModel: fallbackModels[0], fallbackModels } : {}),
+      ...details,
+    };
+  }
+
   private assertConfigured(): void {
     if (!this.config.apiKey) {
-      throw new LLMError(`Missing API key for provider ${this.id}. Set llm.apiKey or the matching environment variable.`, 'INVALID_CONFIG');
+      throw this.createError(`Missing API key for provider ${this.id}. Set llm.apiKey or the matching environment variable.`, 'INVALID_CONFIG');
     }
   }
 }
 
 export type LLMErrorCode = 'API_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMIT' | 'SERVER_ERROR' | 'ABORTED' | 'INVALID_CONFIG';
 
-export class LLMError extends Error {
-  readonly code: LLMErrorCode;
+export class LLMError extends RoxyError {
+  declare readonly code: LLMErrorCode;
   readonly statusCode?: number;
+  readonly requestId?: string;
+  readonly retryAfterMs?: number;
+  readonly providerId?: string;
+  readonly model?: string;
+  readonly fallbackModel?: string;
 
-  constructor(message: string, code: LLMErrorCode, statusCode?: number) {
-    super(message);
+  constructor(message: string, code: LLMErrorCode, statusOrDetails?: number | LLMErrorDetails) {
+    const details = typeof statusOrDetails === 'number'
+      ? { statusCode: statusOrDetails }
+      : statusOrDetails;
+    super(message, {
+      category: llmErrorCategory(code),
+      code,
+      telemetryMessage: `LLM:${code}`,
+      recoverable: code !== 'INVALID_CONFIG' && code !== 'ABORTED',
+      recoveryAction: llmRecoveryAction(code),
+      details: details && Object.keys(details).length > 0 ? { ...details } as Record<string, unknown> : undefined,
+    });
     this.name = 'LLMError';
-    this.code = code;
-    this.statusCode = statusCode;
+    this.statusCode = details?.statusCode;
+    this.requestId = details?.requestId;
+    this.retryAfterMs = details?.retryAfterMs;
+    this.providerId = details?.providerId;
+    this.model = details?.model;
+    this.fallbackModel = details?.fallbackModel;
   }
+}
+
+function llmErrorCategory(code: LLMErrorCode): RoxyErrorCategory {
+  switch (code) {
+    case 'INVALID_CONFIG':
+      return 'config';
+    case 'NETWORK_ERROR':
+    case 'RATE_LIMIT':
+    case 'SERVER_ERROR':
+      return 'network';
+    case 'ABORTED':
+      return 'abort';
+    case 'API_ERROR':
+    default:
+      return 'llm';
+  }
+}
+
+function llmRecoveryAction(code: LLMErrorCode): RoxyRecoveryAction {
+  switch (code) {
+    case 'INVALID_CONFIG':
+      return 'check_config';
+    case 'NETWORK_ERROR':
+    case 'RATE_LIMIT':
+    case 'SERVER_ERROR':
+      return 'retry';
+    case 'ABORTED':
+      return 'stop';
+    case 'API_ERROR':
+    default:
+      return 'check_config';
+  }
+}
+
+
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isFinite(dateMs)) return undefined;
+  return Math.max(0, dateMs - Date.now());
+}
+
+function extractRequestId(headers: Headers, body: string): string | undefined {
+  for (const name of ['x-request-id', 'request-id', 'openai-request-id', 'x-requestid', 'x-correlation-id', 'x-ms-request-id', 'cf-ray']) {
+    const value = headers.get(name);
+    if (value?.trim()) return value.trim();
+  }
+  const parsed = safeParseObject(body);
+  if (!parsed) return undefined;
+  return stringField(parsed, 'request_id')
+    ?? stringField(parsed, 'requestId')
+    ?? nestedStringField(parsed, 'error', 'request_id')
+    ?? nestedStringField(parsed, 'error', 'requestId');
+}
+
+function stringField(value: Record<string, unknown>, key: string): string | undefined {
+  const field = value[key];
+  return typeof field === 'string' && field.trim() ? field.trim() : undefined;
+}
+
+function nestedStringField(value: Record<string, unknown>, parent: string, key: string): string | undefined {
+  const nested = value[parent];
+  return isRecord(nested) ? stringField(nested, key) : undefined;
+}
+
+function classifyHttpStatus(statusCode: number): LLMErrorCode {
+  if (statusCode === 429) return 'RATE_LIMIT';
+  if (statusCode === 401 || statusCode === 403 || statusCode === 404) return 'INVALID_CONFIG';
+  if (statusCode >= 500) return 'SERVER_ERROR';
+  return 'API_ERROR';
+}
+
+function isRetryableHttpStatus(statusCode: number): boolean {
+  return statusCode === 429 || statusCode >= 500;
+}
+
+function isRetryableLLMError(error: LLMError): boolean {
+  return error.code === 'RATE_LIMIT' || error.code === 'SERVER_ERROR' || error.code === 'NETWORK_ERROR';
+}
+
+function trimProviderError(text: string): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return normalized.length > 0 ? normalized.slice(0, 500) : 'No response body';
+}
+
+function isAbortLike(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
+}
+
+function formatUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function finalizeToolCalls(pending: Map<number, { id: string; name: string; argsJson: string }>): ToolCall[] {
@@ -331,3 +523,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+
+
+
+
