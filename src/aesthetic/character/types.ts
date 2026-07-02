@@ -10,7 +10,7 @@ export type BuiltInCharacterId = 'roxy' | 'rudeus' | 'eris' | 'sylphiette' | 'na
 export type CharacterId = BuiltInCharacterId | (string & {});
 
 export type AestheticMode = 'minimal' | 'balanced' | 'immersive';
-export type CharacterSource = 'builtin' | 'global' | 'project';
+export type CharacterSource = 'builtin' | 'global' | 'project' | 'marketplace';
 export type ReviewFocus = 'correctness' | 'security' | 'performance' | 'maintainability' | 'testing' | 'ux' | 'learning';
 export type RiskPreference = 'conservative' | 'balanced' | 'bold';
 export type ExplanationStyle = 'concise' | 'structured' | 'teaching' | 'deep' | 'playful';

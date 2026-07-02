@@ -1,3 +1,23 @@
+export {
+  CharacterAssetsSchema,
+  CharacterBehaviorSchema,
+  CharacterCompanionSchema,
+  CharacterExtensionsSchema,
+  CharacterI18nEntrySchema,
+  CharacterPackageInfoSchema,
+  CharacterSchema,
+  CharacterThemeSchema,
+  EasterEggsSchema,
+  ErrorMessagesSchema,
+  HexColorSchema,
+  ManifestSchema,
+  RelativePackagePathSchema,
+  SplashSchema,
+  StatusTextSchema,
+  validateCharacterJson,
+  validateManifest,
+} from './CharacterSchema.js';
+export type { CharacterJson, Manifest } from './CharacterSchema.js';
 export { CharacterManager } from './CharacterManager.js';
 export type {
   Character,
