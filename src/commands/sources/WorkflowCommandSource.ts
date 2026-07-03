@@ -21,7 +21,8 @@ export class WorkflowCommandSource implements DynamicCommandSource {
   async discover(context: CommandSourceLoadContext): Promise<CommandSourceLoadResult> {
     const builtin = this.options.configManager.get('workflows.builtin') !== false;
     const directories = this.workflowDirectories();
-    const loaded = await new WorkflowLoader({ cwd: this.options.cwd, builtin, directories }).load();
+    const files = this.options.characterManager.getCurrentCharacter().extensions?.workflows;
+    const loaded = await new WorkflowLoader({ cwd: this.options.cwd, builtin, directories, files }).load();
     const language = normalizeLanguage(this.options.configManager.get('ui.language'));
     const commands: CommandDefinition[] = loaded.workflows.map(workflow => ({
       name: `wf:${workflow.id}`,
@@ -56,7 +57,11 @@ export class WorkflowCommandSource implements DynamicCommandSource {
   }
 
   watchPaths(): string[] {
-    return this.workflowDirectories().map(directory => isAbsolute(directory) ? directory : resolve(this.options.cwd, directory));
+    const workflowFiles = this.options.characterManager.getCurrentCharacter().extensions?.workflows ?? [];
+    return [
+      ...this.workflowDirectories().map(directory => isAbsolute(directory) ? directory : resolve(this.options.cwd, directory)),
+      ...workflowFiles.map(file => isAbsolute(file) ? file : resolve(this.options.cwd, file)),
+    ];
   }
 
   private workflowDirectories(): string[] {

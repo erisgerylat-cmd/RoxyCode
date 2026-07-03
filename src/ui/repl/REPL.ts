@@ -287,10 +287,12 @@ export class REPL {
     this.extensionCommands = dynamicCommands.commands;
     this.rebuildCommandRegistry();
 
+    const characterHookFile = this.characterManager.getCurrentCharacter().extensions?.hooks;
     const hookResult = await new HookLoader({
       cwd: process.cwd(),
       config,
       pluginHooks: contributions.hooks,
+      files: characterHookFile ? [characterHookFile] : [],
     }).load();
     this.hookManager.setHooks(hookResult.hooks);
 

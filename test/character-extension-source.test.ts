@@ -5,7 +5,11 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 
 import { loadCharacterFromDirectory } from '../src/aesthetic/character/custom/CustomCharacterLoader.js';
+import { loadCharacterPromptContext } from '../src/aesthetic/character/CharacterPromptLoader.js';
 import { validateCharacterPackage } from '../src/aesthetic/character/custom/CharacterPackageValidator.js';
+import { DEFAULT_CONFIG } from '../src/core/types/config.js';
+import { HookLoader } from '../src/hooks/index.js';
+import { WorkflowLoader } from '../src/workflow/index.js';
 import { writeCharacterPackageFixture } from './helpers/character-package-fixture.js';
 
 test('character extension sources validate and load package-local hooks workflows prompts and i18n', async () => {
@@ -42,8 +46,16 @@ test('character extension sources validate and load package-local hooks workflow
     await mkdir(join(packageDir, 'behaviors', 'workflows'), { recursive: true });
     await mkdir(join(packageDir, 'behaviors', 'prompts'), { recursive: true });
     await mkdir(join(packageDir, 'i18n'), { recursive: true });
-    await writeFile(join(packageDir, 'behaviors', 'hooks.json'), '{"hooks":[]}\n', 'utf8');
-    await writeFile(join(packageDir, 'behaviors', 'workflows', 'code-review.yml'), 'id: code-review\nsteps: []\n', 'utf8');
+    await writeFile(join(packageDir, 'behaviors', 'hooks.json'), JSON.stringify({
+      hooks: [{ id: 'character-style', event: 'before_prompt', kind: 'prompt', prompt: 'Use character package guidance.' }],
+    }), 'utf8');
+    await writeFile(join(packageDir, 'behaviors', 'workflows', 'code-review.yml'), [
+      'id: code-review',
+      'name: Character Code Review',
+      'description: Review code with the active character package.',
+      'prompt: Review the current change.',
+      'steps: []',
+    ].join('\n'), 'utf8');
     await writeFile(join(packageDir, 'behaviors', 'prompts', 'system-prompt.md'), 'System prompt\n', 'utf8');
     await writeFile(join(packageDir, 'behaviors', 'prompts', 'plan-prompt.md'), 'Plan prompt\n', 'utf8');
     await writeFile(join(packageDir, 'behaviors', 'prompts', 'verification-prompt.md'), 'Verification prompt\n', 'utf8');
@@ -62,6 +74,26 @@ test('character extension sources validate and load package-local hooks workflow
     assert.equal(loaded.extensions?.prompts?.systemPrompt, resolve(packageDir, 'behaviors', 'prompts', 'system-prompt.md'));
     assert.equal(loaded.i18n?.['zh-CN']?.name, '洛琪希老师');
     assert.equal(loaded.i18n?.['en-US']?.title, 'Careful Coding Teacher');
+
+    const workflowResult = await new WorkflowLoader({
+      cwd: root,
+      builtin: false,
+      directories: [],
+      files: loaded.extensions?.workflows,
+    }).load();
+    assert.equal(workflowResult.workflows[0]?.id, 'code-review');
+
+    const hookResult = await new HookLoader({
+      cwd: root,
+      config: structuredClone(DEFAULT_CONFIG),
+      files: loaded.extensions?.hooks ? [loaded.extensions.hooks] : [],
+    }).load();
+    assert.equal(hookResult.hooks[0]?.id, 'character-style');
+
+    const promptContext = await loadCharacterPromptContext(loaded, 'zh-CN');
+    assert.match(promptContext ?? '', /System prompt/);
+    assert.match(promptContext ?? '', /Plan prompt/);
+    assert.match(promptContext ?? '', /Verification prompt/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

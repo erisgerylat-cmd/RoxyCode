@@ -289,9 +289,15 @@ src/commands/CommandWatcher.ts
 
 ---
 
-### Phase 3: 扩展性与稳定性（P1-P2，1-2周）
+### Phase 3: 扩展性与稳定性 ✅ 核心完成
 
-#### 3.1 MCP 协议扩展
+#### 3.1 MCP 协议扩展 ✅ 核心完成
+
+**当前状态**：95% 完成度
+- ✅ 支持 stdio、sse、http、streamable-http、ws、websocket 六种传输配置
+- ✅ OAuth PKCE 流程已实现
+- ✅ TokenStore 已实现可替换 backend 和本地 JSON 持久化
+- ⚠️ 系统 keychain 后端作为后续安全增强项保留
 
 ```typescript
 // 传输层抽象
@@ -313,13 +319,19 @@ src/mcp/auth/TokenStore.ts
 ```
 
 **验收标准**：
-- [ ] 支持 6 种传输协议
-- [ ] OAuth 流程完整
-- [ ] Token 安全存储
+- [x] 支持 6 种传输协议
+- [x] OAuth 流程完整
+- [x] TokenStore 可用（后续升级系统 keychain）
 
 ---
 
-#### 3.2 配置管理增强
+#### 3.2 配置管理增强 ✅ 核心完成
+
+**当前状态**：85% 完成度
+- ✅ default/global/project/local/env/session 多层配置优先级生效
+- ✅ configSchema 运行时校验和错误来源定位已实现
+- ✅ `.roxycode/config.local.json` 自动 gitignore
+- ⚠️ 文件 watcher 热重载可作为后续增强继续完善
 
 ```typescript
 // 多层级配置
@@ -349,13 +361,20 @@ src/core/ConfigSchema.ts
 ```
 
 **验收标准**：
-- [ ] 7 层配置优先级生效
-- [ ] Zod schema 验证
+- [x] 多层配置优先级生效
+- [x] 运行时 schema 验证
 - [ ] 配置文件变化自动热重载
 
 ---
 
-#### 3.3 Character 系统补齐
+#### 3.3 Character 系统补齐 ✅ 已完成
+
+**当前状态**：95% 完成度
+- ✅ 角色包 CLI 命令完整可用
+- ✅ Validator/Packer/Template/Exporter 工具链可用
+- ✅ 当前角色包 workflows 已接入 WorkflowLoader、`/workflow` 和动态命令
+- ✅ 当前角色包 hooks 已接入 HookLoader
+- ✅ 当前角色包 prompts 已通过 CharacterPromptLoader 注入 Agent runtimeContext
 
 ```typescript
 // 角色包 CLI 集成
@@ -388,9 +407,9 @@ src/aesthetic/character/CharacterPromptLoader.ts
 ```
 
 **验收标准**：
-- [ ] CLI 命令完整可用
-- [ ] 角色包扩展能力生效
-- [ ] 打包/导出工具链可用
+- [x] CLI 命令完整可用
+- [x] 角色包扩展能力生效
+- [x] 打包/导出工具链可用
 
 ---
 

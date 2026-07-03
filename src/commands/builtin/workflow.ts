@@ -24,7 +24,7 @@ type Lang = 'zh-CN' | 'en-US';
 export async function handleWorkflowCommand(args: string[], options: WorkflowCommandOptions): Promise<void> {
   const language = normalizeLanguage(options.configManager.get('ui.language'));
   const action = (args[0] ?? 'list').toLowerCase();
-  const loadResult = await loadWorkflows(options.configManager);
+  const loadResult = await loadWorkflows(options.configManager, options.characterManager);
 
   if (action === 'list' || action === 'ls') {
     printWorkflowList(loadResult, language);
@@ -55,13 +55,18 @@ export async function handleWorkflowCommand(args: string[], options: WorkflowCom
   printUsage(language);
 }
 
-async function loadWorkflows(configManager: ConfigManager): Promise<WorkflowLoadResult> {
+async function loadWorkflows(configManager: ConfigManager, characterManager?: CharacterManager): Promise<WorkflowLoadResult> {
   const builtin = configManager.get('workflows.builtin') !== false;
   const configuredDirs = configManager.get('workflows.directories');
   const directories = Array.isArray(configuredDirs)
     ? configuredDirs.map(String).filter(Boolean)
     : ['.roxycode/workflows'];
-  return new WorkflowLoader({ cwd: process.cwd(), builtin, directories }).load();
+  return new WorkflowLoader({
+    cwd: process.cwd(),
+    builtin,
+    directories,
+    files: characterManager?.getCurrentCharacter().extensions?.workflows,
+  }).load();
 }
 
 async function runWorkflow(

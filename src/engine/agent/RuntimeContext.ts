@@ -11,6 +11,7 @@ export interface RuntimeContextOptions {
     builtin?: boolean;
     directories?: string[];
   };
+  workflowFiles?: string[];
 }
 
 export interface RuntimeContextSnapshot {
@@ -27,6 +28,7 @@ export async function loadRuntimeContext(cwd: string = process.cwd(), options: R
     cwd,
     builtin: options.workflows?.builtin ?? true,
     directories: options.workflows?.directories,
+    files: options.workflowFiles,
   });
   const [roxyMd, projectJson, profile, memories, workflowResult] = await Promise.all([
     readTextIfExists(join(cwd, 'ROXY.md'), 16_000),

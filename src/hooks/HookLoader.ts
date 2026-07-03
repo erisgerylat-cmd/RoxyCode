@@ -17,17 +17,20 @@ export interface HookLoaderOptions {
   cwd?: string;
   config: RoxyCodeConfig;
   pluginHooks?: RoxyHookDefinition[];
+  files?: string[];
 }
 
 export class HookLoader {
   private readonly cwd: string;
   private readonly config: RoxyCodeConfig;
   private readonly pluginHooks: RoxyHookDefinition[];
+  private readonly files: string[];
 
   constructor(options: HookLoaderOptions) {
     this.cwd = options.cwd ?? process.cwd();
     this.config = options.config;
     this.pluginHooks = options.pluginHooks ?? [];
+    this.files = options.files ?? [];
   }
 
   async load(): Promise<HookLoadResult> {
@@ -60,6 +63,14 @@ export class HookLoader {
       }
     }
 
+    for (const path of this.resolveFiles()) {
+      try {
+        hooks.push(...await this.loadFile(path));
+      } catch (error) {
+        errors.push({ path, message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
     hooks.push(...this.pluginHooks.map(hook => ({ ...hook, source: hook.source ?? 'plugin' })));
     return { hooks: dedupeHooks(hooks), errors, directories };
   }
@@ -67,6 +78,10 @@ export class HookLoader {
   private resolveDirectories(): string[] {
     const directories = this.config.hooks.directories?.length ? this.config.hooks.directories : ['.roxycode/hooks'];
     return directories.map(raw => isAbsolute(raw) ? raw : resolve(this.cwd, raw));
+  }
+
+  private resolveFiles(): string[] {
+    return this.files.map(raw => isAbsolute(raw) ? raw : resolve(this.cwd, raw));
   }
 
   private async loadFile(path: string): Promise<RoxyHookDefinition[]> {

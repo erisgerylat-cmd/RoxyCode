@@ -16,6 +16,7 @@ import { checkTokenBudget, createBudgetTracker, parseTokenBudget, stripTokenBudg
 import { QueryProfiler, type QueryProfileSummary } from '../../runtime/index.js';
 import { StreamingToolExecutor } from './StreamingToolExecutor.js';
 import { createFileReadState } from '../../tool/security/FileReadState.js';
+import { loadCharacterPromptContext } from '../../aesthetic/character/CharacterPromptLoader.js';
 
 const ZERO_USAGE: LLMUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
@@ -50,7 +51,13 @@ export class AgentLoop {
       }
 
       profiler.mark('query_context_loading_start');
-      const runtimeContext = renderRuntimeContext(await loadRuntimeContext(this.options.cwd, { query: userInput, workflows: this.options.config.workflows }), this.options.language);
+      const baseRuntimeContext = renderRuntimeContext(await loadRuntimeContext(this.options.cwd, {
+        query: userInput,
+        workflows: this.options.config.workflows,
+        workflowFiles: this.options.character.extensions?.workflows,
+      }), this.options.language);
+      const characterPromptContext = await loadCharacterPromptContext(this.options.character, this.options.language).catch(() => null);
+      const runtimeContext = [baseRuntimeContext, characterPromptContext].filter(Boolean).join('\n\n') || null;
       profiler.mark('query_context_loading_end');
 
       profiler.mark('query_hook_start', 'before_prompt');

@@ -20,17 +20,20 @@ export interface WorkflowLoaderOptions {
   cwd?: string;
   builtin?: boolean;
   directories?: string[];
+  files?: string[];
 }
 
 export class WorkflowLoader {
   private readonly cwd: string;
   private readonly builtin: boolean;
   private readonly directories: string[];
+  private readonly files: string[];
 
   constructor(options: WorkflowLoaderOptions = {}) {
     this.cwd = options.cwd ?? process.cwd();
     this.builtin = options.builtin ?? true;
     this.directories = options.directories ?? ['.roxycode/workflows'];
+    this.files = options.files ?? [];
   }
 
   async load(): Promise<WorkflowLoadResult> {
@@ -46,6 +49,15 @@ export class WorkflowLoader {
       const loaded = await this.loadDirectory(directory.resolved);
       for (const error of loaded.errors) errors.push(error);
       for (const workflow of loaded.workflows) workflows.set(workflow.id, workflow);
+    }
+
+    for (const file of this.resolveFiles()) {
+      try {
+        const workflow = await this.loadFile(file);
+        workflows.set(workflow.id, workflow);
+      } catch (error) {
+        errors.push({ path: file, message: error instanceof Error ? error.message : String(error) });
+      }
     }
 
     return {
@@ -80,15 +92,23 @@ export class WorkflowLoader {
       if (!['.yml', '.yaml'].includes(extname(entry.name).toLowerCase())) continue;
       const path = resolve(directory, entry.name);
       try {
-        const raw = await readFile(path, 'utf-8');
-        const parsed = parseWorkflowYaml(raw);
-        workflows.push(normalizeWorkflow(parsed, path));
+        workflows.push(await this.loadFile(path));
       } catch (error) {
         errors.push({ path, message: error instanceof Error ? error.message : String(error) });
       }
     }
 
     return { workflows, errors };
+  }
+
+  private resolveFiles(): string[] {
+    return this.files.map(raw => isAbsolute(raw) ? raw : resolve(this.cwd, raw));
+  }
+
+  private async loadFile(path: string): Promise<WorkflowDefinition> {
+    const raw = await readFile(path, 'utf-8');
+    const parsed = parseWorkflowYaml(raw);
+    return normalizeWorkflow(parsed, path);
   }
 }
 

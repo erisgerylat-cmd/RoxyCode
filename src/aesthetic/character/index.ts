@@ -25,6 +25,12 @@ export {
 export type { CharacterJson, CharacterPackageJson, Manifest } from './CharacterSchema.js';
 export { CharacterManager } from './CharacterManager.js';
 export {
+  loadCharacterPromptBundle,
+  loadCharacterPromptContext,
+  renderCharacterPromptBundle,
+} from './CharacterPromptLoader.js';
+export type { CharacterPromptBundle } from './CharacterPromptLoader.js';
+export {
   CharacterPackageManager,
   installCharacterPackage,
   readPackageManifest,
