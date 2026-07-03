@@ -82,6 +82,10 @@ export class MemoryStore {
     return { record, created: true };
   }
 
+  async saveMemory(input: AddMemoryInput): Promise<AddMemoryResult> {
+    return this.add(input);
+  }
+
   async list(options: MemoryListOptions = {}): Promise<MemoryRecord[]> {
     const scopes: MemoryScope[] = options.scope ? [options.scope] : ['global', 'project'];
     const records = new Map<string, MemoryRecord>();
@@ -110,6 +114,10 @@ export class MemoryStore {
     return result.slice(0, options.limit ?? result.length);
   }
 
+  async listMemories(options: MemoryListOptions = {}): Promise<MemoryRecord[]> {
+    return this.list(options);
+  }
+
   async get(id: string): Promise<MemoryRecord | null> {
     return (await this.list({ includeArchived: false })).find(record => record.id === id || record.id.startsWith(id)) ?? null;
   }
@@ -120,6 +128,10 @@ export class MemoryStore {
     await this.append(record.scope, { event: 'archive', timestamp: Date.now(), id: record.id, reason });
     await this.rebuildIndex(record.scope);
     return true;
+  }
+
+  async deleteMemory(id: string, reason?: string): Promise<boolean> {
+    return this.archive(id, reason);
   }
 
   async clear(scope: MemoryScope): Promise<void> {
@@ -141,6 +153,16 @@ export class MemoryStore {
     const path = this.indexPathForScope(scope);
     if (!existsSync(path)) return [];
     return parseMemoryIndex(await readFile(path, 'utf8'));
+  }
+
+  async loadIndex(scope: MemoryScope): Promise<MemoryIndexEntry[]>;
+  async loadIndex(): Promise<Record<MemoryScope, MemoryIndexEntry[]>>;
+  async loadIndex(scope?: MemoryScope): Promise<MemoryIndexEntry[] | Record<MemoryScope, MemoryIndexEntry[]>> {
+    if (scope) return this.readIndex(scope);
+    return {
+      global: await this.readIndex('global'),
+      project: await this.readIndex('project'),
+    };
   }
 
   async recallRelevant(query: string, options: MemoryRecallOptions = {}): Promise<MemoryRecord[]> {

@@ -10,6 +10,7 @@ export interface AutoMemoryExtractorOptions {
   language: 'zh-CN' | 'en-US';
   characterId?: string;
   sessionId?: string;
+  intervalTurns?: number;
 }
 
 export class AutoMemoryExtractor {
@@ -17,17 +18,27 @@ export class AutoMemoryExtractor {
   private readonly language: 'zh-CN' | 'en-US';
   private readonly characterId?: string;
   private readonly sessionId?: string;
+  private readonly intervalTurns: number;
 
   constructor(options: AutoMemoryExtractorOptions) {
     this.llmProvider = options.llmProvider;
     this.language = options.language;
     this.characterId = options.characterId;
     this.sessionId = options.sessionId;
+    this.intervalTurns = Math.max(1, Math.floor(options.intervalTurns ?? 1));
+  }
+
+  shouldExtract(messages: Message[]): boolean {
+    const relevant = messages.filter(message => message.role !== 'system');
+    if (relevant.length < 2) return false;
+    if (this.intervalTurns <= 1) return true;
+    const turns = messages.filter(message => message.role === 'user').length;
+    return turns > 0 && turns % this.intervalTurns === 0;
   }
 
   async extract(messages: Message[]): Promise<AddMemoryInput[]> {
+    if (!this.shouldExtract(messages)) return [];
     const relevant = messages.filter(message => message.role !== 'system').slice(-8);
-    if (relevant.length < 2) return [];
 
     const transcript = relevant.map((message, index) => `#${index + 1} ${message.role}\n${messageToText(message)}`).join('\n\n');
 

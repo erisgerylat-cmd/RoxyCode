@@ -29,7 +29,7 @@ test('memory store applies default scopes, lists records, and reports stats', as
   try {
     const store = new MemoryStore({ cwd, globalDir });
 
-    const user = await store.add({
+    const user = await store.saveMemory({
       type: 'user',
       content: 'User prefers concise Chinese answers with direct file references.',
       tags: ['style', 'ZH'],
@@ -45,9 +45,9 @@ test('memory store applies default scopes, lists records, and reports stats', as
     assert.equal(user.created, true);
     assert.equal(reference.created, true);
 
-    assert.equal((await store.list()).length, 2);
-    assert.equal((await store.list({ scope: 'global' })).length, 1);
-    assert.equal((await store.list({ scope: 'project' })).length, 1);
+    assert.equal((await store.listMemories()).length, 2);
+    assert.equal((await store.listMemories({ scope: 'global' })).length, 1);
+    assert.equal((await store.listMemories({ scope: 'project' })).length, 1);
 
     const stats = await store.getStats({ enabled: true, language: 'en-US' });
     assert.equal(stats.enabled, true);
@@ -107,16 +107,17 @@ test('memory store maintains MEMORY.md index and exposes store-level recall', as
     assert.match(index, /learning\/global/);
     assert.match(index, /\[\[typescript-style\]\]/);
 
-    const parsed = await store.readIndex('global');
+    const parsed = await store.loadIndex('global');
     assert.equal(parsed.length, 2);
     assert.equal(parsed.some(entry => entry.id === learning.record.id), true);
     assert.equal(parsed.some(entry => entry.links.includes('typescript-style')), true);
+    assert.equal((await store.loadIndex()).global.length, 2);
 
     const recalled = await store.recallRelevant('TypeScript 教学方式', { limit: 1 });
     assert.equal(recalled.length, 1);
     assert.equal(recalled[0].id, learning.record.id);
 
-    await store.archive(learning.record.id);
+    await store.deleteMemory(learning.record.id);
     const afterArchive = await readFile(indexPath, 'utf8');
     assert.doesNotMatch(afterArchive, new RegExp(learning.record.id));
   } finally {
@@ -405,6 +406,19 @@ test('auto memory extractor can extract Claude-style core memory types with no t
   assert.equal(provider.chatCalls[0].toolChoice, 'none');
   assert.match(JSON.stringify(provider.chatCalls[0].messages), /受限的长期记忆提取子 Agent|restricted child agent/i);
 });
+
+test('auto memory extractor supports turn interval gating', async () => {
+  const provider = new FakeProvider(JSON.stringify({ memories: [{ type: 'user', content: 'Prefers concise replies.' }] }));
+  const extractor = new AutoMemoryExtractor({ llmProvider: provider, language: 'en-US', intervalTurns: 10 });
+  const nineTurns = Array.from({ length: 9 }, (_, index) => userMessage(`turn ${index + 1}`));
+  const tenTurns = Array.from({ length: 10 }, (_, index) => userMessage(`turn ${index + 1}`));
+
+  assert.equal(extractor.shouldExtract(nineTurns), false);
+  assert.deepEqual(await extractor.extract(nineTurns), []);
+  assert.equal(extractor.shouldExtract(tenTurns), true);
+  assert.equal((await extractor.extract(tenTurns)).length, 1);
+});
+
 test('auto memory extractor returns empty candidates on provider failure or short transcript', async () => {
   const failing = new FakeProvider('', true);
   const extractor = new AutoMemoryExtractor({ llmProvider: failing, language: 'zh-CN' });

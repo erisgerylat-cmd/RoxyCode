@@ -27,15 +27,16 @@
 
 **目标**：Memory、Profile、Workflow 从占位符变为可用实现
 
-#### 1.1 Memory 系统实现 🔴 最高优先级
+#### 1.1 Memory 系统实现 ✅ 核心完成
 
-**当前状态**：30% 完成度
+**当前状态**：85% 完成度
 - ✅ 类型定义完整
-- ✅ MemoryStore 基础骨架
-- ❌ 自动提取 agent 未实现
-- ❌ 智能召回未实现
-- ❌ MEMORY.md 索引机制未实现
-- ❌ 交叉引用 [[link]] 未实现
+- ✅ MemoryStore 完整存储接口
+- ✅ 自动提取 agent 已实现
+- ✅ 智能召回已实现（TF-IDF top-5）
+- ✅ MEMORY.md 索引机制已实现（200 行限制）
+- ✅ 交叉引用 [[link]] 已实现
+- ✅ `loadIndex/saveMemory/listMemories/deleteMemory` 兼容接口已补齐
 
 **实施任务**：
 
@@ -79,13 +80,13 @@ src/engine/agent/AgentLoop.ts
 ```
 
 **验收标准**：
-- [ ] MEMORY.md 自动维护，200 行限制生效
-- [ ] 根据 query 召回 top-5 相关记忆
-- [ ] 每 10 轮触发自动提取
-- [ ] 支持 [[cross-link]] 语法
-- [ ] 6 种类型完整支持
+- [x] MEMORY.md 自动维护，200 行限制生效
+- [x] 根据 query 召回 top-5 相关记忆
+- [x] 每 10 轮触发自动提取
+- [x] 支持 [[cross-link]] 语法
+- [x] 6 种类型完整支持
 
-**预期完成度**：30% → 85%
+**完成度**：30% → 85%
 
 ---
 
@@ -455,9 +456,9 @@ Phase 3 完成 (93%)
 ### 立即开始（本周）
 
 1. **Memory 系统**
-   - [ ] 实现 MemoryStore.loadIndex()
-   - [ ] 实现 MemoryIndex.parseIndex()
-   - [ ] 集成到 AgentLoop
+   - [x] 实现 MemoryStore.loadIndex()
+   - [x] 实现 MemoryIndex.parseIndex()
+   - [x] 集成到 AgentLoop
 
 2. **Profile 系统**
    - [x] 实现 ProfileManager.load()

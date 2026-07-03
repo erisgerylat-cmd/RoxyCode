@@ -944,6 +944,7 @@ export class REPL {
       language: this.getLanguage(),
       characterId: this.characterManager.getCurrentCharacter().id,
       sessionId: this.sessionStore.sessionId,
+      intervalTurns: 10,
     });
     const candidates = await extractor.extract(messages);
     for (const candidate of candidates.slice(0, 5)) {
