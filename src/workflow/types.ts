@@ -19,6 +19,23 @@ export const WORKFLOW_ALLOWED_TOOL_NAMES = [
 
 export type WorkflowToolName = typeof WORKFLOW_ALLOWED_TOOL_NAMES[number];
 
+export type WorkflowStepKind = 'prompt' | 'tool' | 'agent';
+
+export interface WorkflowStepDefinition {
+  id?: string;
+  name?: string;
+  type?: WorkflowStepKind;
+  prompt?: string;
+  tool?: WorkflowToolName;
+  args?: Record<string, unknown> | string;
+  if?: string;
+  unless?: string;
+  repeat?: number | string;
+  set?: Record<string, unknown> | string;
+}
+
+export type WorkflowStep = string | WorkflowStepDefinition;
+
 export interface WorkflowInputDefinition {
   name: string;
   label: string;
@@ -38,9 +55,9 @@ export interface WorkflowDefinition {
   when?: string;
   inputs: WorkflowInputDefinition[];
   prompt: string;
-  steps: string[];
+  steps: WorkflowStep[];
   allowedTools: WorkflowToolName[];
-  verify: string[];
+  verify: WorkflowStep[];
   source: WorkflowSource;
   path?: string;
   version?: string;
@@ -74,4 +91,29 @@ export interface ParsedWorkflowArguments {
   values: Record<string, string>;
   positionals: string[];
   missingRequired: WorkflowInputDefinition[];
+}
+
+export type WorkflowRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+export interface WorkflowStepResult {
+  id: string;
+  name: string;
+  type: WorkflowStepKind;
+  status: WorkflowRunStatus;
+  skipped?: boolean;
+  output?: string;
+  error?: string;
+  startedAt: string;
+  finishedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface WorkflowRunResult {
+  workflowId: string;
+  status: WorkflowRunStatus;
+  startedAt: string;
+  finishedAt: string;
+  steps: WorkflowStepResult[];
+  variables: Record<string, unknown>;
+  errors: string[];
 }

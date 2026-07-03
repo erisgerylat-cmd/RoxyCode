@@ -1,4 +1,4 @@
-import type { ParsedWorkflowArguments, WorkflowDefinition, WorkflowRenderOptions } from './types.js';
+import type { ParsedWorkflowArguments, WorkflowDefinition, WorkflowRenderOptions, WorkflowStep } from './types.js';
 
 export function renderWorkflowPrompt(
   workflow: WorkflowDefinition,
@@ -132,7 +132,16 @@ function renderEnglishPrompt(
   return sections.join('\n');
 }
 
-function numbered(items: string[]): string[] {
+function numbered(items: WorkflowStep[]): string[] {
   if (items.length === 0) return ['1. (未声明)'];
-  return items.map((item, index) => `${index + 1}. ${item}`);
+  return items.map((item, index) => `${index + 1}. ${formatStep(item)}`);
+}
+
+function formatStep(step: WorkflowStep): string {
+  if (typeof step === 'string') return step;
+  const label = step.name ?? step.prompt ?? step.tool ?? step.id ?? 'workflow step';
+  const type = step.type ?? (step.tool ? 'tool' : 'prompt');
+  const condition = step.if ? ` if=${step.if}` : step.unless ? ` unless=${step.unless}` : '';
+  const repeat = step.repeat !== undefined ? ` repeat=${step.repeat}` : '';
+  return `[${type}] ${label}${condition}${repeat}`;
 }

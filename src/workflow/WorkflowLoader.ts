@@ -9,6 +9,8 @@ import type {
   WorkflowInputDefinition,
   WorkflowLoadError,
   WorkflowLoadResult,
+  WorkflowStep,
+  WorkflowStepDefinition,
   WorkflowToolName,
 } from './types.js';
 import { WORKFLOW_ALLOWED_TOOL_NAMES, WORKFLOW_CATEGORIES, WORKFLOW_MODES } from './types.js';
@@ -163,9 +165,9 @@ function normalizeWorkflow(raw: Record<string, unknown>, path: string): Workflow
     when: asString(raw.when),
     inputs,
     prompt,
-    steps: asStringArray(raw.steps),
+    steps: normalizeSteps(raw.steps),
     allowedTools: normalizeTools(raw.allowedTools ?? raw.tools),
-    verify: asStringArray(raw.verify),
+    verify: normalizeSteps(raw.verify),
     source: 'project',
     path,
     version: asString(raw.version),
@@ -202,6 +204,41 @@ function normalizeTools(value: unknown): WorkflowToolName[] {
   return tools.length > 0 ? tools : ['read_file', 'list_directory', 'grep_search'];
 }
 
+function normalizeSteps(value: unknown): WorkflowStep[] {
+  if (!Array.isArray(value)) return [];
+  const steps: WorkflowStep[] = [];
+  for (const item of value) {
+    if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+      const text = asString(item);
+      if (text) steps.push(text);
+      continue;
+    }
+    if (!isRecord(item)) continue;
+    const step: WorkflowStepDefinition = {};
+    const id = asString(item.id);
+    const name = asString(item.name);
+    const type = asEnum(asString(item.type), ['prompt', 'tool', 'agent'] as const, 'prompt');
+    const prompt = asString(item.prompt ?? item.run ?? item.text);
+    const tool = asEnum(asString(item.tool), WORKFLOW_ALLOWED_TOOL_NAMES, undefined);
+    const condition = asString(item.if);
+    const unless = asString(item.unless);
+    const repeat = item.repeat === undefined ? undefined : typeof item.repeat === 'number' ? item.repeat : asString(item.repeat);
+    const set = item.set;
+    if (id) step.id = normalizeId(id);
+    if (name) step.name = name;
+    if (type) step.type = type;
+    if (prompt) step.prompt = prompt;
+    if (tool) step.tool = tool;
+    if (isRecord(item.args) || typeof item.args === 'string') step.args = item.args as Record<string, unknown> | string;
+    if (condition) step.if = condition;
+    if (unless) step.unless = unless;
+    if (repeat !== undefined) step.repeat = repeat;
+    if (isRecord(set) || typeof set === 'string') step.set = set as Record<string, unknown> | string;
+    if (Object.keys(step).length > 0) steps.push(step);
+  }
+  return steps;
+}
+
 function compareWorkflow(a: WorkflowDefinition, b: WorkflowDefinition): number {
   if (a.source !== b.source) return a.source === 'builtin' ? -1 : 1;
   return a.id.localeCompare(b.id);
@@ -232,7 +269,9 @@ function asBoolean(value: unknown): boolean {
   return Boolean(value);
 }
 
-function asEnum<const T extends readonly string[]>(value: string, candidates: T, fallback: T[number]): T[number] {
+function asEnum<const T extends readonly string[]>(value: string, candidates: T, fallback: T[number]): T[number];
+function asEnum<const T extends readonly string[]>(value: string, candidates: T, fallback: undefined): T[number] | undefined;
+function asEnum<const T extends readonly string[]>(value: string, candidates: T, fallback: T[number] | undefined): T[number] | undefined {
   return (candidates as readonly string[]).includes(value) ? value as T[number] : fallback;
 }
 

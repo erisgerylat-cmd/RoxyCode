@@ -4,6 +4,7 @@ import type { ConfigManager } from '../../core/ConfigManager.js';
 import { normalizeLanguage } from '../../i18n/index.js';
 import {
   WorkflowLoader,
+  WorkflowRunner,
   findWorkflow,
   parseWorkflowArguments,
   renderWorkflowPrompt,
@@ -93,22 +94,26 @@ async function runWorkflow(
     return;
   }
 
-  const prompt = renderWorkflowPrompt(workflow, parsed, {
+  const renderOptions = {
     cwd: process.cwd(),
     language,
     characterName: options.characterManager.getCurrentCharacter().name,
     sessionId: options.sessionId,
-  });
-
-  if (!options.runAgentPrompt) {
-    console.log(chalk.yellow(language === 'zh-CN' ? zh('agentMissing') : '  Agent runner is not available in this environment.'));
-    console.log(chalk.dim(prompt));
-    return;
-  }
+  };
 
   console.log(chalk.cyan(`  ${language === 'zh-CN' ? zh('running') : 'Running workflow'}: ${workflow.id} - ${workflow.name}`));
   console.log(chalk.dim(`  ${language === 'zh-CN' ? zh('mode') : 'Recommended mode'}: ${workflow.mode}`));
-  await options.runAgentPrompt(prompt);
+  const result = await new WorkflowRunner({
+    ...renderOptions,
+    runAgentPrompt: options.runAgentPrompt,
+    runWholeWorkflowWithAgent: Boolean(options.runAgentPrompt),
+  }).run(workflow, parsed);
+  printWorkflowRunResult(result, language);
+
+  if (!options.runAgentPrompt) {
+    console.log(chalk.yellow(language === 'zh-CN' ? zh('agentMissing') : '  Agent runner is not available in this environment.'));
+    console.log(chalk.dim(renderWorkflowPrompt(workflow, parsed, renderOptions)));
+  }
 }
 
 function printWorkflowList(loadResult: WorkflowLoadResult, language: Lang): void {
@@ -179,6 +184,22 @@ function printErrors(loadResult: WorkflowLoadResult, language: Lang): void {
   for (const error of loadResult.errors) console.log(chalk.dim(`    ${error.path}: ${error.message}`));
 }
 
+function printWorkflowRunResult(result: Awaited<ReturnType<WorkflowRunner['run']>>, language: Lang): void {
+  const ok = result.status === 'completed';
+  console.log(ok
+    ? chalk.green(`  ${language === 'zh-CN' ? zh('runComplete') : 'Workflow run prepared.'}`)
+    : chalk.red(`  ${language === 'zh-CN' ? zh('runFailed') : 'Workflow run failed.'}`));
+  const completed = result.steps.filter(step => step.status === 'completed').length;
+  const skipped = result.steps.filter(step => step.status === 'skipped').length;
+  const failed = result.steps.filter(step => step.status === 'failed').length;
+  console.log(chalk.dim(`  steps: completed=${completed}, skipped=${skipped}, failed=${failed}`));
+  for (const step of result.steps) {
+    const marker = step.status === 'completed' ? '✓' : step.status === 'skipped' ? '-' : '×';
+    console.log(chalk.dim(`  ${marker} ${step.id} ${step.name}`));
+    if (step.error) console.log(chalk.red(`    ${step.error}`));
+  }
+}
+
 function printUsage(language: Lang): void {
   const usage = '/workflow [list|show|run|paths]';
   console.log(chalk.dim(`  ${language === 'zh-CN' ? zh('usage') : 'Usage'}: ${usage}`));
@@ -207,7 +228,9 @@ type ZhKey =
   | 'steps'
   | 'verify'
   | 'pathsTitle'
-  | 'loadErrors';
+  | 'loadErrors'
+  | 'runComplete'
+  | 'runFailed';
 
 const ZH: Record<ZhKey, string> = {
   usage: '\u7528\u6cd5',
@@ -228,6 +251,8 @@ const ZH: Record<ZhKey, string> = {
   verify: '\u9a8c\u8bc1\u8981\u6c42',
   pathsTitle: '\u5de5\u4f5c\u6d41\u8def\u5f84',
   loadErrors: '\u52a0\u8f7d\u8b66\u544a',
+  runComplete: '\u5de5\u4f5c\u6d41\u6267\u884c\u8ba1\u5212\u5df2\u5b8c\u6210',
+  runFailed: '\u5de5\u4f5c\u6d41\u6267\u884c\u5931\u8d25',
 };
 
 function zh(key: ZhKey): string {
