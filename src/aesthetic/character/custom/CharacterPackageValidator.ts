@@ -3,7 +3,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { ZodError } from 'zod';
 import {
-  CharacterSchema,
+  CharacterPackageJsonSchema,
   ManifestSchema,
   type CharacterJson,
   type Manifest,
@@ -88,7 +88,7 @@ async function readCharacter(packageRoot: string, manifest: Manifest, errors: Ch
 
   try {
     const parsed = JSON.parse(await readFile(fullPath, 'utf-8')) as unknown;
-    return CharacterSchema.parse(parsed) as CharacterJson;
+    return CharacterPackageJsonSchema.parse(parsed) as CharacterJson;
   } catch (error) {
     pushParseError(errors, characterPath, error);
     return undefined;

@@ -11,6 +11,7 @@
     "dev": "tsx src/index.ts",
     "build": "tsup src/index.ts --format esm",
     "start": "node dist/index.js",
+    "schema:characters": "tsx scripts/generate-character-schemas.ts",
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {

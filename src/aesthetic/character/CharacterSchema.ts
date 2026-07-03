@@ -104,6 +104,21 @@ export const StatusTextSchema = z.object({
   step: RuntimeStringRendererSchema,
 }).passthrough();
 
+export const StatusTextJsonSchema = z.object({
+  thinking: z.string(),
+  analyzing: z.string(),
+  planning: z.string(),
+  executing: z.string(),
+  reading: TemplateStringSchema,
+  writing: TemplateStringSchema,
+  running: TemplateStringSchema,
+  searching: z.string(),
+  waiting: z.string(),
+  done: z.string(),
+  error: z.string(),
+  step: TemplateStringSchema,
+}).passthrough();
+
 export const SplashSchema = z.object({
   asciiArt: z.array(z.string()).optional(),
   tagline: z.string(),
@@ -124,6 +139,16 @@ export const ErrorMessagesSchema = z.object({
   networkError: z.string(),
   tokenLimit: z.string(),
   toolFailed: RuntimeStringRendererSchema,
+  permissionDenied: z.string(),
+  rateLimit: z.string(),
+  contextOverflow: z.string(),
+}).passthrough();
+
+export const ErrorMessagesJsonSchema = z.object({
+  generic: z.string(),
+  networkError: z.string(),
+  tokenLimit: z.string(),
+  toolFailed: TemplateStringSchema,
   permissionDenied: z.string(),
   rateLimit: z.string(),
   contextOverflow: z.string(),
@@ -193,6 +218,21 @@ export const CharacterI18nValueSchema = z.union([
   RelativePackagePathSchema,
 ]);
 
+export const CharacterI18nJsonEntrySchema = z.object({
+  name: z.string().optional(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  personality: z.string().optional(),
+  statusText: StatusTextJsonSchema.partial().optional(),
+  easterEggs: EasterEggsSchema.partial().optional(),
+  errorMessages: ErrorMessagesJsonSchema.partial().optional(),
+}).passthrough();
+
+export const CharacterI18nJsonValueSchema = z.union([
+  CharacterI18nJsonEntrySchema,
+  RelativePackagePathSchema,
+]);
+
 export const CharacterSchema = z.object({
   id: z.string().regex(KEBAB_CASE, 'Character id must be kebab-case'),
   name: z.string().min(1),
@@ -222,7 +262,37 @@ export const CharacterSchema = z.object({
   }).optional(),
 }).passthrough();
 
+export const CharacterPackageJsonSchema = z.object({
+  id: z.string().regex(KEBAB_CASE, 'Character id must be kebab-case'),
+  name: z.string().min(1),
+  nameEn: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string().min(1),
+  personality: z.string().min(1),
+  theme: CharacterThemeSchema,
+  behavior: CharacterBehaviorSchema.optional(),
+  statusText: StatusTextJsonSchema,
+  companion: CharacterCompanionSchema.optional(),
+  splash: SplashSchema,
+  easterEggs: EasterEggsSchema,
+  errorMessages: ErrorMessagesJsonSchema,
+  systemPromptPersona: z.string().min(10),
+  custom: z.boolean().optional(),
+  source: z.enum(['builtin', 'global', 'project', 'marketplace']).optional(),
+  packageInfo: CharacterPackageInfoSchema.optional(),
+  assets: CharacterAssetsSchema,
+  extensions: CharacterExtensionsSchema,
+  i18n: z.record(z.string().regex(LOCALE, 'Locale must look like zh-CN or en-US'), CharacterI18nJsonValueSchema).optional(),
+  metadata: z.object({
+    source: z.string().optional(),
+    characterType: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    ageRating: z.enum(AGE_RATINGS).optional(),
+  }).optional(),
+}).passthrough();
+
 export type CharacterJson = z.infer<typeof CharacterSchema>;
+export type CharacterPackageJson = z.infer<typeof CharacterPackageJsonSchema>;
 
 export function validateManifest(value: unknown): Manifest {
   return ManifestSchema.parse(value);
@@ -230,4 +300,8 @@ export function validateManifest(value: unknown): Manifest {
 
 export function validateCharacterJson(value: unknown): CharacterJson {
   return CharacterSchema.parse(value);
+}
+
+export function validateCharacterPackageJson(value: unknown): CharacterPackageJson {
+  return CharacterPackageJsonSchema.parse(value);
 }

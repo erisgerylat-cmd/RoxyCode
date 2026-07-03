@@ -6,19 +6,23 @@ export {
   CharacterI18nEntrySchema,
   CharacterI18nValueSchema,
   CharacterPackageInfoSchema,
+  CharacterPackageJsonSchema,
   CharacterSchema,
   CharacterThemeSchema,
   EasterEggsSchema,
+  ErrorMessagesJsonSchema,
   ErrorMessagesSchema,
   HexColorSchema,
   ManifestSchema,
   RelativePackagePathSchema,
   SplashSchema,
+  StatusTextJsonSchema,
   StatusTextSchema,
   validateCharacterJson,
+  validateCharacterPackageJson,
   validateManifest,
 } from './character/CharacterSchema.js';
-export type { CharacterJson, Manifest } from './character/CharacterSchema.js';
+export type { CharacterJson, CharacterPackageJson, Manifest } from './character/CharacterSchema.js';
 export { CharacterManager } from './character/CharacterManager.js';
 export {
   CharacterPackageManager,
