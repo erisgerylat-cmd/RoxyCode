@@ -10,6 +10,10 @@ import { createCharacterPackageTemplate } from '../../aesthetic/character/custom
 import { validateCharacterPackage } from '../../aesthetic/character/custom/CharacterPackageValidator.js';
 import { characterToTemplate, createCustomCharacterTemplate, serializeCustomCharacterTemplate } from '../../aesthetic/character/custom/CharacterTemplate.js';
 import { ensureProjectCharacterDirectory, isValidCharacterId } from '../../aesthetic/character/custom/CustomCharacterLoader.js';
+import {
+  listCharacterMarketplacePackages,
+  validateCharacterMarketplaceIndex,
+} from '../../aesthetic/character/marketplace/CharacterMarketplaceIndex.js';
 import type { Character, CharacterId } from '../../aesthetic/character/types.js';
 import { renderCharacterSwitch } from '../../ui/renderers/CharacterArt.js';
 
@@ -76,6 +80,10 @@ export async function handleCharacterCommand(
     return exportCharacterPackageCommand(args.slice(1), characterManager);
   }
 
+  if (subCommand === 'marketplace') {
+    return characterMarketplaceCommand(args.slice(1));
+  }
+
   if (subCommand === 'random') {
     const ids = characterManager.getCharacterList()
       .map(item => item.id)
@@ -95,7 +103,7 @@ export async function handleCharacterCommand(
   }
 
   console.log(chalk.red(`  未知角色或子命令: /character ${subCommand}`));
-  console.log(chalk.dim('  可用: list, info, create, paths, packages, install, uninstall, update, validate, pack, export, random, roxy, rudeus, eris, sylphiette, nanahoshi，或自定义角色 id'));
+  console.log(chalk.dim('  可用: list, info, create, paths, packages, install, uninstall, update, validate, pack, export, marketplace, random, roxy, rudeus, eris, sylphiette, nanahoshi，或自定义角色 id'));
 }
 
 function showCharacterList(characterManager: CharacterManager): void {
@@ -461,6 +469,101 @@ async function exportCharacterPackageCommand(args: string[], characterManager: C
     }
   } catch (error) {
     console.log(chalk.red(`  角色导出失败: ${errorMessage(error)}`));
+  }
+}
+
+async function characterMarketplaceCommand(args: string[]): Promise<void> {
+  const action = args[0]?.toLowerCase();
+  const marketplacePath = firstPositional(args.slice(1));
+
+  if (!action || action === 'help') {
+    console.log(chalk.bold('  角色包市场命令'));
+    console.log(chalk.dim('  /character marketplace validate <marketplace.json|dir>'));
+    console.log(chalk.dim('  /character marketplace list <marketplace.json|dir>'));
+    return;
+  }
+
+  if (!marketplacePath) {
+    console.log(chalk.red('  缺少 marketplace 路径。'));
+    console.log(chalk.dim(`  用法: /character marketplace ${action} <marketplace.json|dir>`));
+    return;
+  }
+
+  if (action === 'validate') {
+    await validateCharacterMarketplaceCommand(marketplacePath);
+    return;
+  }
+
+  if (action === 'list') {
+    await listCharacterMarketplaceCommand(marketplacePath);
+    return;
+  }
+
+  console.log(chalk.red(`  未知角色包市场子命令: ${action}`));
+  console.log(chalk.dim('  可用: validate, list'));
+}
+
+async function validateCharacterMarketplaceCommand(marketplacePath: string): Promise<void> {
+  try {
+    const result = await validateCharacterMarketplaceIndex(marketplacePath);
+    console.log('');
+    console.log(chalk.bold(`  验证角色包市场: ${result.marketplacePath}`));
+    if (result.marketplace) {
+      console.log(`  市场: ${result.marketplace.displayName ?? result.marketplace.name}`);
+      console.log(`  包数量: ${result.marketplace.packages.length}`);
+    }
+    for (const error of result.errors) {
+      console.log(chalk.red(`  error ${error.path}: ${error.message}`));
+    }
+    for (const warning of result.warnings) {
+      console.log(chalk.yellow(`  warning ${warning.path}: ${warning.message}`));
+    }
+    console.log(result.success ? chalk.green('  验证通过。') : chalk.red('  验证失败。'));
+    console.log('');
+  } catch (error) {
+    console.log(chalk.red(`  角色包市场验证失败: ${errorMessage(error)}`));
+  }
+}
+
+async function listCharacterMarketplaceCommand(marketplacePath: string): Promise<void> {
+  try {
+    const result = await validateCharacterMarketplaceIndex(marketplacePath);
+    console.log('');
+    console.log(chalk.bold(`  角色包市场: ${result.marketplace?.displayName ?? result.marketplace?.name ?? marketplacePath}`));
+
+    if (!result.marketplace || !result.success) {
+      for (const error of result.errors) {
+        console.log(chalk.red(`  error ${error.path}: ${error.message}`));
+      }
+      console.log(chalk.red('  市场索引存在错误，无法列出可安装角色包。'));
+      console.log('');
+      return;
+    }
+
+    const packages = listCharacterMarketplacePackages(result.marketplace, result.marketplacePath);
+    if (packages.length === 0) {
+      console.log(chalk.dim('  暂无可安装角色包。'));
+      console.log('');
+      return;
+    }
+
+    for (const pkg of packages) {
+      console.log(`  ${chalk.bold(pkg.name)} ${chalk.dim(`v${pkg.version}`)} - ${pkg.displayName}`);
+      console.log(chalk.dim(`    ${pkg.description}`));
+      console.log(chalk.dim(`    source: ${pkg.source}`));
+      if (pkg.sha256) console.log(chalk.dim(`    sha256: ${pkg.sha256}`));
+      if (pkg.categories.length || pkg.tags.length) {
+        console.log(chalk.dim(`    tags: ${[...pkg.categories, ...pkg.tags].join(', ')}`));
+      }
+      console.log(chalk.dim(`    安装: ${pkg.installHint}`));
+    }
+
+    if (result.warnings.length > 0) {
+      console.log(chalk.yellow(`  warning: ${result.warnings.length} 条，请用 /character marketplace validate ${result.marketplacePath} 查看。`));
+    }
+    console.log('');
+  } catch (error) {
+    console.log(chalk.red(`  角色包市场列表失败: ${errorMessage(error)}`));
   }
 }
 

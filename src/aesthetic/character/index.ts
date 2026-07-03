@@ -71,6 +71,28 @@ export type {
   CharacterPackageValidationResult,
   CharacterPackageValidationSeverity,
 } from './custom/CharacterPackageValidator.js';
+export {
+  listCharacterMarketplacePackages,
+  loadCharacterMarketplaceIndex,
+  resolveMarketplacePackageSource,
+  validateCharacterMarketplaceIndex,
+} from './marketplace/CharacterMarketplaceIndex.js';
+export type {
+  CharacterMarketplaceIssue,
+  CharacterMarketplaceIssueSeverity,
+  CharacterMarketplaceListItem,
+  CharacterMarketplaceValidationResult,
+} from './marketplace/CharacterMarketplaceIndex.js';
+export {
+  CharacterMarketplaceEntrySchema,
+  CharacterMarketplaceSchema,
+  CharacterMarketplaceSourceSchema,
+} from './marketplace/CharacterMarketplaceSchema.js';
+export type {
+  CharacterMarketplace,
+  CharacterMarketplaceEntry,
+  CharacterMarketplaceSource,
+} from './marketplace/CharacterMarketplaceSchema.js';
 export type {
   Character,
   CharacterId,
