@@ -4,6 +4,11 @@
 
 对照 Claude Code：Claude Code 的插件体系把 `plugin.json` 元信息、installed plugin metadata、commands/hooks/skills/MCP 等贡献内容分层管理，并要求插件路径使用相对路径。RoxyCode 角色包采用同样的工程边界：`manifest.json` 只描述包与贡献入口，`character.json` 承载角色定义，资源与扩展能力通过相对路径引用，最终仍进入 RoxyCode 既有的角色、Hooks、Workflow、权限和审计流程。
 
+配套文档：
+
+- `docs/CHARACTER_PACKAGE_CLI.md`：创建、校验、打包、安装、卸载、更新、导出的完整命令说明。
+- `docs/CHARACTER_MARKETPLACE_ROADMAP.md`：角色包 marketplace 的安全基线和演进路线。
+
 ## 1. 文件结构
 
 ```text
@@ -221,6 +226,17 @@ my-character/                        # 角色包根目录
 - 根目录要求：压缩包根目录必须直接包含 `manifest.json` 与 `character.json`，不应多包一层无意义目录。
 - 解压安全限制：最多 1000 个 entry，单文件最大 10MB，总解压大小最大 50MB。
 - 安全拒绝项：路径逃逸、绝对路径、控制字符路径、重复 entry 覆盖、symlink。
+
+常用命令：
+
+```text
+/character validate ./my-character
+/character pack ./my-character --out ./dist
+/character verify ./dist/roxy-sensei-1.2.0.roxychar
+/character install ./dist/roxy-sensei-1.2.0.roxychar
+```
+
+完整命令说明见 `docs/CHARACTER_PACKAGE_CLI.md`。
 
 打包时应应用 `.roxycharignore`，语法参考 `.gitignore` 的常见子集：
 
@@ -447,3 +463,5 @@ v1.1 可扩展内容：
 - 公钥签名、作者身份校验与可信来源策略。
 - marketplace 依赖解析和跨市场依赖 allowlist。
 - 更完整的 SemVer range 支持。
+
+更细的 marketplace 阶段规划见 `docs/CHARACTER_MARKETPLACE_ROADMAP.md`。

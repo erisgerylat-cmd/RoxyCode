@@ -79,6 +79,22 @@ Other related commands:
 - `/character info [id]`
 - `/character paths`
 - `/character <id>`
+- `/character create <id> --package`
+- `/character validate <path>`
+- `/character pack <package-dir>`
+- `/character install <path>`
+- `/character packages`
+- `/character update <path>`
+- `/character uninstall <name>`
+- `/character export <id|current>`
+
+Package workflow reference:
+
+- `docs/CHARACTER_PACKAGE_SPEC.md`
+- `docs/CHARACTER_PACKAGE_CLI.md`
+- `docs/CHARACTER_MARKETPLACE_ROADMAP.md`
+
+RoxyCode now treats shareable characters as installable packages, not only local JSON snippets. This mirrors Claude Code's plugin packaging direction while keeping RoxyCode's product layer focused on character identity, anime aesthetics, Chinese guidance, workflows, and safe customization.
 
 ## Loading Priority
 
@@ -293,3 +309,4 @@ Known limitations:
 - Custom character changes require restart; hot reload can be added later.
 - Aesthetic mode currently stores intensity and is surfaced in commands/status; deeper renderer-specific behavior can be expanded gradually.
 - Global character writes are intentionally not used by `/character create`; project-local templates are safer and easier to review.
+- Remote marketplace installation is intentionally deferred until cache, SHA-256, signature, and trust policy are complete.
