@@ -20,6 +20,23 @@ export {
 } from './character/CharacterSchema.js';
 export type { CharacterJson, Manifest } from './character/CharacterSchema.js';
 export { CharacterManager } from './character/CharacterManager.js';
+export {
+  CharacterPackageManager,
+  installCharacterPackage,
+  readPackageManifest,
+  uninstallCharacterPackage,
+  updateCharacterPackage,
+} from './character/custom/CharacterPackageManager.js';
+export type {
+  InstallOptions,
+  InstallResult,
+  InstalledCharacterPackage,
+  CharacterPackageInstallPaths,
+  UninstallOptions,
+  UninstallResult,
+  UpdateOptions,
+  UpdateResult,
+} from './character/custom/CharacterPackageManager.js';
 export type {
   Character,
   CharacterId,
