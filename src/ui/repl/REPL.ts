@@ -27,6 +27,7 @@ import { StatusBar, type StatusState } from '../renderers/StatusBar.js';
 import { ToolActivityRenderer } from '../renderers/ToolActivityRenderer.js';
 import { SessionStore } from '../../session/store/SessionStore.js';
 import { AutoMemoryExtractor, MemoryPolicyError, MemoryStore } from '../../session/memory/index.js';
+import { ProfileOnboarding, ProfileManager, ProjectProfileManager } from '../../session/index.js';
 import { HookLoader, HookManager } from '../../hooks/index.js';
 import { McpConfigLoader, McpToolAdapter } from '../../mcp/index.js';
 import { PluginLoader, collectPluginContributions, type PluginLoadResult } from '../../plugin/index.js';
@@ -137,6 +138,7 @@ export class REPL {
     await this.initializeSession();
     await this.loadExtensions();
     if (!process.stdin.isTTY) return this.startFallback({ initialized: true });
+    await this.showStartupOnboardingIfNeeded();
     const character = this.characterManager.getCurrentCharacter();
     this.reader = new RawLineReader({ prompt: this.getPromptString(character), historyLimit: 500 });
     this.reader.on('change', (buffer: string) => this.onInputChange(buffer));
@@ -237,6 +239,39 @@ export class REPL {
     if (this.extensionsLoaded) return;
     this.extensionsLoaded = true;
     await this.refreshExtensions({ note: 'extensions loaded', restartWatcher: process.stdin.isTTY });
+  }
+
+  private async showStartupOnboardingIfNeeded(): Promise<void> {
+    const language = this.getLanguage();
+    const isZh = language === 'zh-CN';
+    const profileManager = new ProfileManager(process.cwd());
+    const projectManager = new ProjectProfileManager(process.cwd());
+    const [hasProfile, hasProject] = await Promise.all([
+      profileManager.exists(),
+      projectManager.exists(),
+    ]);
+    if (hasProfile && hasProject) return;
+
+    const suggestion = hasProfile
+      ? null
+      : await new ProfileOnboarding(process.cwd()).suggestProfile({ configManager: this.configManager }).catch(() => null);
+    const profileCommand = `/profile init --language ${language === 'en-US' ? 'en' : 'zh'} --role ${suggestion?.defaultCharacter ?? this.characterManager.getCurrentCharacter().id}`;
+
+    console.log('');
+    console.log(chalk.cyan(isZh ? '  ┌── 首次启动引导 ──┐' : '  ┌── First Run Setup ──┐'));
+    if (!hasProfile) {
+      console.log(chalk.cyan('  │') + chalk.white(isZh ? '  未检测到个人画像 .roxycode/profile.json' : '  Missing personal profile .roxycode/profile.json'));
+      console.log(chalk.cyan('  │') + chalk.dim(`  ${profileCommand}`));
+    }
+    if (!hasProject) {
+      console.log(chalk.cyan('  │') + chalk.white(isZh ? '  未检测到项目画像 .roxycode/project.json' : '  Missing project profile .roxycode/project.json'));
+      console.log(chalk.cyan('  │') + chalk.dim('  /project init'));
+    }
+    console.log(chalk.cyan('  │') + chalk.dim(isZh
+      ? '  对照 Claude Code 的 /init：RoxyCode 将个人偏好和项目规则拆开保存。'
+      : '  Like Claude Code /init, RoxyCode keeps personal preferences separate from project rules.'));
+    console.log(chalk.cyan('  └────────────────────┘'));
+    console.log('');
   }
 
   private async refreshExtensions(options: { note?: string; restartWatcher?: boolean } = {}): Promise<void> {

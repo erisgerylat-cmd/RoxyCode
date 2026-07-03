@@ -99,7 +99,7 @@ src/engine/agent/AgentLoop.ts
 - ✅ ProjectProfileManager 已实现
 - ✅ RoxyManifest 解析已实现
 - ✅ ProjectScanner 已实现
-- ⚠️ 首次启动自动引导尚未接入 UI 启动流程
+- ✅ 首次启动引导已接入交互式 UI 启动流程
 
 **实施任务**：
 
@@ -137,7 +137,7 @@ src/session/project/ProjectScanner.ts
 ```
 
 **验收标准**：
-- [ ] 首次启动触发 onboarding
+- [x] 首次启动触发 onboarding
 - [x] .roxycode/profile.json 正确保存
 - [x] .roxycode/project.json 自动生成
 - [x] ROXY.md 解析生效
@@ -463,7 +463,7 @@ Phase 3 完成 (93%)
 2. **Profile 系统**
    - [x] 实现 ProfileManager.load()
    - [x] 实现 ProfileOnboarding
-   - [ ] 首次启动引导
+   - [x] 首次启动引导
 
 3. **Workflow 引擎**
    - [x] 实现 WorkflowRunner.run()
