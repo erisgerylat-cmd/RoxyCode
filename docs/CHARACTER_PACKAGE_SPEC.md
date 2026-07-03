@@ -83,7 +83,7 @@ my-character/                        # 角色包根目录
   "categories": ["anime", "teaching"],
 
   "engines": {                       // 兼容性要求（推荐）
-    "roxycode": ">=0.2.0"
+    "roxycode": ">=0.1.0"
   },
 
   "main": "character.json",          // 入口文件（必需）
@@ -128,6 +128,13 @@ my-character/                        # 角色包根目录
 | `contributes` | 可选 | 声明角色包贡献的角色、workflow、hook、theme 等内容。 |
 | `dependencies` | 可选 | 角色包依赖，后续用于商城安装依赖解析。 |
 | `metadata` | 可选 | 商城展示、审核、搜索和分级使用的补充信息。 |
+
+兼容性规则：
+
+- `engines.roxycode` 缺失时只给 warning，不拒绝安装。
+- `engines.roxycode` 不满足当前 RoxyCode 版本时默认拒绝安装。
+- 用户显式使用 `/character install <path> --force` 时可以覆盖版本不兼容，但会输出 warning。
+- 当前支持的 range 子集：`>=`、`>`、`<=`、`<`、`=`、`^` 与 `*`。
 
 ## 3. character.json 规范
 
@@ -212,6 +219,8 @@ my-character/                        # 角色包根目录
 - 最大大小：50MB
 - 推荐大小：小于 10MB
 - 根目录要求：压缩包根目录必须直接包含 `manifest.json` 与 `character.json`，不应多包一层无意义目录。
+- 解压安全限制：最多 1000 个 entry，单文件最大 10MB，总解压大小最大 50MB。
+- 安全拒绝项：路径逃逸、绝对路径、控制字符路径、重复 entry 覆盖、symlink。
 
 打包时应应用 `.roxycharignore`，语法参考 `.gitignore` 的常见子集：
 
@@ -364,6 +373,30 @@ pnpm run schema:characters
 
 RoxyCode 当前只做完整性校验，不把 SHA-256 当作“作者可信”的证明。它能证明文件未被意外篡改，但不能证明发布者身份。后续远程 marketplace 和公钥签名会在这个基础上继续扩展。
 
+### 7.4 安装状态元数据
+
+安装后的角色包会包含：
+
+```text
+<package>/.roxycode/install.json
+```
+
+示例：
+
+```json
+{
+  "packageName": "roxy-sensei",
+  "version": "1.2.0",
+  "scope": "project",
+  "installPath": "D:/Programing/RoxyCode/.roxycode/characters/roxy-sensei",
+  "installedAt": "2026-07-03T10:00:00.000Z",
+  "updatedAt": "2026-07-03T11:00:00.000Z",
+  "sourcePath": "D:/Downloads/roxy-sensei.roxychar"
+}
+```
+
+加载角色时，RoxyCode 优先读取该文件生成 `character.packageInfo`；如果该文件不存在，则回退到目录 `birthtime`。更新角色包时会保留原始 `installedAt`，刷新 `updatedAt`。
+
 ## 8. 安全与权限边界
 
 角色包不能直接获得额外工具权限。即使角色包贡献 hooks、workflows、prompts 或未来 tools，也必须进入 RoxyCode 已有链路：
@@ -413,3 +446,4 @@ v1.1 可扩展内容：
 - 从 marketplace 直接安装角色包。
 - 公钥签名、作者身份校验与可信来源策略。
 - marketplace 依赖解析和跨市场依赖 allowlist。
+- 更完整的 SemVer range 支持。

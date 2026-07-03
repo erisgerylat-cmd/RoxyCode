@@ -312,6 +312,9 @@ async function installCharacterPackageCommand(args: string[], characterManager: 
     console.log(`  版本: ${result.manifest.version}`);
     console.log(`  范围: ${result.scope}`);
     console.log(`  角色 id: ${result.character.id}`);
+    for (const warning of result.warnings) {
+      console.log(chalk.yellow(`  warning: ${warning}`));
+    }
     console.log(chalk.dim(`  下一步: /character ${result.character.id}`));
   } catch (error) {
     console.log(chalk.red(`  角色包安装失败: ${errorMessage(error)}`));
@@ -368,6 +371,9 @@ async function updateCharacterPackageCommand(args: string[], characterManager: C
     console.log(`  版本: ${result.previousVersion ?? 'unknown'} -> ${result.manifest.version}`);
     console.log(`  范围: ${result.scope}`);
     console.log(`  角色 id: ${result.character.id}`);
+    for (const warning of result.warnings) {
+      console.log(chalk.yellow(`  warning: ${warning}`));
+    }
   } catch (error) {
     const message = errorMessage(error);
     console.log(chalk.red(`  角色包更新失败: ${message}`));

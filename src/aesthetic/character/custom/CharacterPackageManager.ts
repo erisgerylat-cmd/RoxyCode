@@ -15,6 +15,11 @@ import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { ManifestSchema, type Manifest } from '../CharacterSchema.js';
 import type { Character } from '../types.js';
 import { getCustomCharacterPaths, loadCharacterFromDirectory } from './CustomCharacterLoader.js';
+import {
+  readCharacterPackageInstallMetadata,
+  writeCharacterPackageInstallMetadata,
+} from './CharacterPackageInstallMetadata.js';
+import { checkRoxyCodeVersionCompatibility } from './VersionCompatibility.js';
 
 export interface InstallOptions {
   global?: boolean;
@@ -52,6 +57,7 @@ export interface InstallResult {
   installPath: string;
   scope: 'global' | 'project';
   updated: boolean;
+  warnings: string[];
 }
 
 export interface UninstallResult {
@@ -70,6 +76,11 @@ export type PreparedCharacterPackageSource = {
   cleanup?: () => Promise<void>;
 };
 
+const MAX_ARCHIVE_TOTAL_BYTES = 50 * 1024 * 1024;
+const MAX_ARCHIVE_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES = 1000;
+const UNIX_SYMLINK_MODE = 0o120000;
+
 export class CharacterPackageManager {
   constructor(private readonly cwd: string = process.cwd()) {}
 
@@ -80,8 +91,20 @@ export class CharacterPackageManager {
 
     try {
       const manifest = await readPackageManifest(source.path);
+      const compatibility = await checkRoxyCodeVersionCompatibility(manifest.engines?.roxycode);
+      const warnings: string[] = [];
+      if (compatibility.warning) warnings.push(compatibility.warning);
+      if (!compatibility.compatible) {
+        const message = `Character package ${manifest.name}@${manifest.version} requires RoxyCode ${compatibility.range ?? 'unknown'}, current version is ${compatibility.currentVersion}.`;
+        if (!options.force) throw new Error(`${message} Use --force to install anyway.`);
+        warnings.push(`${message} Installed because --force was used.`);
+      }
+
       const targetDir = safeJoin(installRoot, manifest.name);
       const existed = existsSync(targetDir);
+      const previousMetadata = existed
+        ? await readCharacterPackageInstallMetadata(targetDir).catch(() => undefined)
+        : undefined;
 
       if (existed && !options.force) {
         throw new Error(`Character package already installed: ${manifest.name}. Use force to overwrite.`);
@@ -92,12 +115,15 @@ export class CharacterPackageManager {
       try {
         await cp(source.path, stagedDir, { recursive: true });
         const character = await loadCharacterFromDirectory(stagedDir, scope);
-        await writeInstallMetadata(stagedDir, {
+        const now = new Date().toISOString();
+        const installedAt = previousMetadata?.installedAt ?? now;
+        await writeCharacterPackageInstallMetadata(stagedDir, {
           packageName: manifest.name,
           version: manifest.version,
           scope,
-          installedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+          installPath: targetDir,
+          installedAt,
+          updatedAt: previousMetadata ? nextTimestampAfter(now, installedAt) : now,
           sourcePath: resolve(packagePath),
         });
 
@@ -112,6 +138,7 @@ export class CharacterPackageManager {
           installPath: targetDir,
           scope,
           updated: existed,
+          warnings,
         };
       } catch (error) {
         await rm(stagedParent, { recursive: true, force: true });
@@ -227,12 +254,55 @@ export async function prepareCharacterPackageSource(packagePath: string): Promis
 
 async function extractZipSafely(zipPath: string, destination: string): Promise<void> {
   const zip = new AdmZip(zipPath);
-  for (const entry of zip.getEntries()) {
+  const entries = zip.getEntries();
+  if (entries.length > MAX_ARCHIVE_ENTRIES) {
+    throw new Error(`Character archive has too many entries: ${entries.length} > ${MAX_ARCHIVE_ENTRIES}.`);
+  }
+
+  const seen = new Set<string>();
+  let totalBytes = 0;
+  const preparedEntries: Array<{ entry: AdmZip.IZipEntry; targetPath: string }> = [];
+
+  for (const entry of entries) {
     const entryName = entry.entryName.replace(/\\/g, '/');
-    if (!entryName || entryName.startsWith('/') || entryName.includes('\0')) {
+    if (
+      !entryName
+      || entryName.startsWith('/')
+      || entryName.includes('\0')
+      || hasControlCharacters(entryName)
+      || entryName.split('/').includes('..')
+    ) {
       throw new Error(`Unsafe zip entry path: ${entry.entryName}`);
     }
+    if (isZipSymlink(entry)) {
+      throw new Error(`Character archive must not contain symlinks: ${entry.entryName}`);
+    }
+
+    const normalizedEntryName = normalizeZipEntryName(entryName);
+    if (seen.has(normalizedEntryName)) {
+      throw new Error(`Duplicate zip entry would overwrite a previous file: ${entry.entryName}`);
+    }
+    seen.add(normalizedEntryName);
+
     const targetPath = safeJoin(destination, entryName);
+    if (entry.isDirectory) {
+      preparedEntries.push({ entry, targetPath });
+      continue;
+    }
+
+    const entrySize = entry.header.size;
+    if (entrySize > MAX_ARCHIVE_FILE_BYTES) {
+      throw new Error(`Character archive file is too large: ${entry.entryName} (${entrySize} bytes).`);
+    }
+    totalBytes += entrySize;
+    if (totalBytes > MAX_ARCHIVE_TOTAL_BYTES) {
+      throw new Error(`Character archive uncompressed size is larger than 50MB.`);
+    }
+
+    preparedEntries.push({ entry, targetPath });
+  }
+
+  for (const { entry, targetPath } of preparedEntries) {
     if (entry.isDirectory) {
       await mkdir(targetPath, { recursive: true });
       continue;
@@ -240,6 +310,20 @@ async function extractZipSafely(zipPath: string, destination: string): Promise<v
     await mkdir(resolve(targetPath, '..'), { recursive: true });
     await writeFile(targetPath, entry.getData());
   }
+}
+
+function hasControlCharacters(value: string): boolean {
+  return /[\u0000-\u001F\u007F]/.test(value);
+}
+
+function normalizeZipEntryName(value: string): string {
+  return value.replace(/\/+$/, '').toLowerCase();
+}
+
+function isZipSymlink(entry: AdmZip.IZipEntry): boolean {
+  const attr = entry.header.attr ?? 0;
+  const unixMode = (attr >>> 16) & 0o170000;
+  return unixMode === UNIX_SYMLINK_MODE;
 }
 
 async function findExtractedPackageRoot(tempRoot: string): Promise<string> {
@@ -279,11 +363,6 @@ async function listInstalledFromRoot(root: string, scope: 'global' | 'project'):
   return packages;
 }
 
-async function writeInstallMetadata(packageDir: string, metadata: Record<string, unknown>): Promise<void> {
-  await mkdir(join(packageDir, '.roxycode'), { recursive: true });
-  await writeFile(join(packageDir, '.roxycode', 'install.json'), `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8');
-}
-
 function safeJoin(baseDir: string, relativePath: string): string {
   if (isAbsolute(relativePath) || /^[a-zA-Z]:[\\/]/.test(relativePath)) {
     throw new Error(`Path must be relative: ${relativePath}`);
@@ -295,4 +374,9 @@ function safeJoin(baseDir: string, relativePath: string): string {
     throw new Error(`Path escapes base directory: ${relativePath}`);
   }
   return target;
+}
+
+function nextTimestampAfter(candidate: string, previous: string): string {
+  if (candidate !== previous) return candidate;
+  return new Date(new Date(previous).getTime() + 1).toISOString();
 }

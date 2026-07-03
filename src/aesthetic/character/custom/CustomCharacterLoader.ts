@@ -27,6 +27,7 @@ import type {
   SplashConfig,
   StatusTextMap,
 } from '../types.js';
+import { readCharacterPackageInstallMetadata } from './CharacterPackageInstallMetadata.js';
 import { createCustomCharacterTemplate } from './CharacterTemplate.js';
 
 export interface CustomCharacterPaths {
@@ -186,15 +187,17 @@ function resolveCharacterEntryPath(characterDir: string, manifest?: Manifest): s
 }
 
 async function createPackageInfo(manifest: Manifest, characterDir: string): Promise<CharacterPackageInfo> {
+  const metadata = await readCharacterPackageInstallMetadata(characterDir).catch(() => undefined);
   const stats = await stat(characterDir);
   return {
-    packageName: manifest.name,
-    version: manifest.version,
+    packageName: metadata?.packageName ?? manifest.name,
+    version: metadata?.version ?? manifest.version,
     author: manifest.author,
     license: manifest.license,
     repository: manifest.repository?.url,
-    installPath: characterDir,
-    installedAt: stats.birthtime.toISOString(),
+    installPath: metadata?.installPath ?? characterDir,
+    installedAt: metadata?.installedAt ?? stats.birthtime.toISOString(),
+    updatedAt: metadata?.updatedAt,
   };
 }
 

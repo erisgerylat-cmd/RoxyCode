@@ -29,6 +29,7 @@ export interface CharacterPackageInfo {
   repository?: string;
   installPath: string;
   installedAt: string;
+  updatedAt?: string;
 }
 
 export interface CharacterAssets {

@@ -31,7 +31,7 @@ export async function writeCharacterPackageFixture(
     author: { name: 'RoxyCode Team', email: 'team@example.com' },
     license: 'MIT',
     repository: { type: 'git', url: 'https://github.com/roxycode/character-roxy-sensei' },
-    engines: { roxycode: '>=0.2.0' },
+    engines: { roxycode: '>=0.1.0' },
     main: 'character.json',
     ...options.manifestPatch,
   }), 'utf8');

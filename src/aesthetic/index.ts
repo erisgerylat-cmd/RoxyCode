@@ -42,6 +42,22 @@ export type {
   CharacterPackageVerifyOptions,
   CharacterPackageVerifyResult,
 } from './character/custom/CharacterPackageIntegrity.js';
+export {
+  getInstallMetadataPath,
+  readCharacterPackageInstallMetadata,
+  writeCharacterPackageInstallMetadata,
+} from './character/custom/CharacterPackageInstallMetadata.js';
+export type {
+  CharacterPackageInstallMetadata,
+} from './character/custom/CharacterPackageInstallMetadata.js';
+export {
+  checkRoxyCodeVersionCompatibility,
+  getCurrentRoxyCodeVersion,
+  satisfiesRange,
+} from './character/custom/VersionCompatibility.js';
+export type {
+  VersionCompatibilityResult,
+} from './character/custom/VersionCompatibility.js';
 export type {
   InstallOptions,
   InstallResult,

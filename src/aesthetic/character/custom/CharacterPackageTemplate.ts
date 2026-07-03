@@ -133,7 +133,7 @@ function createManifest(id: string, characterJson: Record<string, unknown>, auth
     description: readString(characterJson.description) || `Custom RoxyCode character package for ${id}.`,
     author: { name: authorName },
     license: 'MIT',
-    engines: { roxycode: '>=0.2.0' },
+    engines: { roxycode: '>=0.1.0' },
     main: 'character.json',
     contributes: {
       character: 'character.json',
