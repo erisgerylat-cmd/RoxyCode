@@ -3,7 +3,10 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CharacterManager } from '../../aesthetic/character/CharacterManager.js';
+import { exportCharacterPackage } from '../../aesthetic/character/custom/CharacterPackageExporter.js';
 import { CharacterPackageManager } from '../../aesthetic/character/custom/CharacterPackageManager.js';
+import { packCharacterPackage } from '../../aesthetic/character/custom/CharacterPackagePacker.js';
+import { createCharacterPackageTemplate } from '../../aesthetic/character/custom/CharacterPackageTemplate.js';
 import { validateCharacterPackage } from '../../aesthetic/character/custom/CharacterPackageValidator.js';
 import { characterToTemplate, createCustomCharacterTemplate, serializeCustomCharacterTemplate } from '../../aesthetic/character/custom/CharacterTemplate.js';
 import { ensureProjectCharacterDirectory, isValidCharacterId } from '../../aesthetic/character/custom/CustomCharacterLoader.js';
@@ -65,6 +68,14 @@ export async function handleCharacterCommand(
     return validateCharacterPackageCommand(args.slice(1));
   }
 
+  if (subCommand === 'pack') {
+    return packCharacterPackageCommand(args.slice(1));
+  }
+
+  if (subCommand === 'export') {
+    return exportCharacterPackageCommand(args.slice(1), characterManager);
+  }
+
   if (subCommand === 'random') {
     const ids = characterManager.getCharacterList()
       .map(item => item.id)
@@ -84,7 +95,7 @@ export async function handleCharacterCommand(
   }
 
   console.log(chalk.red(`  未知角色或子命令: /character ${subCommand}`));
-  console.log(chalk.dim('  可用: list, info, create, paths, packages, install, uninstall, update, validate, random, roxy, rudeus, eris, sylphiette, nanahoshi，或自定义角色 id'));
+  console.log(chalk.dim('  可用: list, info, create, paths, packages, install, uninstall, update, validate, pack, export, random, roxy, rudeus, eris, sylphiette, nanahoshi，或自定义角色 id'));
 }
 
 function showCharacterList(characterManager: CharacterManager): void {
@@ -172,10 +183,11 @@ async function createCharacter(args: string[], characterManager: CharacterManage
   const id = firstPositional(args);
   const force = args.includes('--force');
   const fromCurrent = args.includes('--from-current') || args.includes('--from') && args.includes('current');
+  const asPackage = args.includes('--package');
 
   if (!id) {
     console.log(chalk.red('  缺少角色 id。'));
-    console.log(chalk.dim('  用法: /character create <id> [--force] [--from-current]'));
+    console.log(chalk.dim('  用法: /character create <id> [--force] [--from-current] [--package]'));
     return;
   }
 
@@ -185,6 +197,28 @@ async function createCharacter(args: string[], characterManager: CharacterManage
   }
 
   const dir = await ensureProjectCharacterDirectory(process.cwd());
+  if (asPackage) {
+    const packageDir = join(dir, id);
+    try {
+      const result = await createCharacterPackageTemplate({
+        id,
+        directory: packageDir,
+        character: fromCurrent ? characterManager.getCurrentCharacter() : undefined,
+        force,
+      });
+      await characterManager.loadCustomCharacters();
+      console.log(chalk.green('  标准角色包模板已生成'));
+      console.log(`  路径: ${result.packageDir}`);
+      console.log(`  包名: ${result.manifest.name}`);
+      console.log(`  角色 id: ${result.character.id}`);
+      console.log(chalk.dim(`  下一步: /character validate ${result.packageDir}`));
+      console.log(chalk.dim(`  切换角色: /character ${result.character.id}`));
+    } catch (error) {
+      console.log(chalk.red(`  标准角色包模板生成失败: ${errorMessage(error)}`));
+    }
+    return;
+  }
+
   const path = join(dir, `${id}.json`);
   if (existsSync(path) && !force) {
     console.log(chalk.yellow(`  角色模板已存在: ${path}`));
@@ -366,6 +400,70 @@ async function validateCharacterPackageCommand(args: string[]): Promise<void> {
   }
 }
 
+async function packCharacterPackageCommand(args: string[]): Promise<void> {
+  const packagePath = firstPositional(args);
+  if (!packagePath) {
+    console.log(chalk.red('  缺少角色包目录。'));
+    console.log(chalk.dim('  用法: /character pack <package-dir> [--out <dir>] [--force]'));
+    return;
+  }
+
+  try {
+    const result = await packCharacterPackage(packagePath, {
+      outDir: optionValue(args, '--out'),
+      force: args.includes('--force'),
+    });
+    console.log(chalk.green('  角色包打包成功'));
+    console.log(`  包名: ${result.packageName}`);
+    console.log(`  版本: ${result.version}`);
+    console.log(`  文件数: ${result.files.length}`);
+    console.log(`  输出: ${result.packagePath}`);
+    if (result.warnings.length > 0) {
+      console.log(chalk.yellow(`  warning: ${result.warnings.length} 条，请用 /character validate 查看详情。`));
+    }
+    console.log(chalk.dim(`  下一步: /character install ${result.packagePath}`));
+  } catch (error) {
+    console.log(chalk.red(`  角色包打包失败: ${errorMessage(error)}`));
+  }
+}
+
+async function exportCharacterPackageCommand(args: string[], characterManager: CharacterManager): Promise<void> {
+  const target = firstPositional(args);
+  if (!target) {
+    console.log(chalk.red('  缺少要导出的角色 id。'));
+    console.log(chalk.dim('  用法: /character export <id|current> [--out <dir>] [--package|--roxychar] [--force]'));
+    return;
+  }
+
+  const characterId = target === 'current' ? characterManager.getCurrentCharacter().id : resolveCharacterId(target, characterManager);
+  const character = characterId ? characterManager.getCharacter(characterId) : undefined;
+  if (!character) {
+    console.log(chalk.red(`  角色不存在: ${target}`));
+    return;
+  }
+
+  try {
+    const outDir = optionValue(args, '--out') ?? join(process.cwd(), 'packages');
+    const result = await exportCharacterPackage(character, {
+      outDir,
+      force: args.includes('--force'),
+      roxychar: args.includes('--roxychar'),
+    });
+    console.log(chalk.green('  角色导出成功'));
+    console.log(`  角色 id: ${character.id}`);
+    console.log(`  包目录: ${result.packageDir}`);
+    if (result.archivePath) {
+      console.log(`  归档: ${result.archivePath}`);
+      console.log(chalk.dim(`  下一步: /character install ${result.archivePath}`));
+    } else {
+      console.log(chalk.dim(`  下一步: /character validate ${result.packageDir}`));
+      console.log(chalk.dim(`  打包: /character pack ${result.packageDir}`));
+    }
+  } catch (error) {
+    console.log(chalk.red(`  角色导出失败: ${errorMessage(error)}`));
+  }
+}
+
 async function switchTo(id: CharacterId, characterManager: CharacterManager): Promise<void> {
   await characterManager.switchCharacter(id);
   const c = characterManager.getCurrentCharacter();
@@ -393,13 +491,38 @@ function resolveCharacterId(input: string, characterManager: CharacterManager): 
 }
 
 function firstPositional(args: string[]): string | undefined {
-  return args.find(arg => !arg.startsWith('--'));
+  return positionalArgs(args)[0];
+}
+
+function positionalArgs(args: string[]): string[] {
+  const positionals: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('--')) {
+      if (!arg.includes('=') && optionTakesValue(arg)) i++;
+      continue;
+    }
+    positionals.push(arg);
+  }
+  return positionals;
 }
 
 function parseScope(args: string[]): 'all' | 'global' | 'project' {
   if (args.includes('--global')) return 'global';
   if (args.includes('--project')) return 'project';
   return 'all';
+}
+
+function optionValue(args: string[], name: string): string | undefined {
+  const equals = args.find(arg => arg.startsWith(`${name}=`));
+  if (equals) return equals.slice(name.length + 1);
+  const index = args.indexOf(name);
+  if (index >= 0) return args[index + 1];
+  return undefined;
+}
+
+function optionTakesValue(name: string): boolean {
+  return name === '--out';
 }
 
 function errorMessage(error: unknown): string {

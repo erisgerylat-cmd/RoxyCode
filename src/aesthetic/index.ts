@@ -38,6 +38,28 @@ export type {
   UpdateResult,
 } from './character/custom/CharacterPackageManager.js';
 export {
+  exportCharacterPackage,
+} from './character/custom/CharacterPackageExporter.js';
+export type {
+  CharacterPackageExportOptions,
+  CharacterPackageExportResult,
+} from './character/custom/CharacterPackageExporter.js';
+export {
+  packCharacterPackage,
+} from './character/custom/CharacterPackagePacker.js';
+export type {
+  CharacterPackagePackOptions,
+  CharacterPackagePackResult,
+} from './character/custom/CharacterPackagePacker.js';
+export {
+  characterToPackageJson,
+  createCharacterPackageTemplate,
+} from './character/custom/CharacterPackageTemplate.js';
+export type {
+  CharacterPackageTemplateOptions,
+  CharacterPackageTemplateResult,
+} from './character/custom/CharacterPackageTemplate.js';
+export {
   validateCharacterPackage,
 } from './character/custom/CharacterPackageValidator.js';
 export type {
