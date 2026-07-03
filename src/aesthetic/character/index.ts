@@ -4,6 +4,7 @@ export {
   CharacterCompanionSchema,
   CharacterExtensionsSchema,
   CharacterI18nEntrySchema,
+  CharacterI18nValueSchema,
   CharacterPackageInfoSchema,
   CharacterSchema,
   CharacterThemeSchema,

@@ -188,6 +188,11 @@ export const CharacterI18nEntrySchema = z.object({
   errorMessages: ErrorMessagesSchema.partial().optional(),
 }).passthrough();
 
+export const CharacterI18nValueSchema = z.union([
+  CharacterI18nEntrySchema,
+  RelativePackagePathSchema,
+]);
+
 export const CharacterSchema = z.object({
   id: z.string().regex(KEBAB_CASE, 'Character id must be kebab-case'),
   name: z.string().min(1),
@@ -208,7 +213,7 @@ export const CharacterSchema = z.object({
   packageInfo: CharacterPackageInfoSchema.optional(),
   assets: CharacterAssetsSchema,
   extensions: CharacterExtensionsSchema,
-  i18n: z.record(z.string().regex(LOCALE, 'Locale must look like zh-CN or en-US'), CharacterI18nEntrySchema).optional(),
+  i18n: z.record(z.string().regex(LOCALE, 'Locale must look like zh-CN or en-US'), CharacterI18nValueSchema).optional(),
   metadata: z.object({
     source: z.string().optional(),
     characterType: z.string().optional(),

@@ -153,6 +153,18 @@ test('character schema accepts character package json with template strings', ()
   assert.equal(parsed.assets?.icon, 'assets/icon.png');
 });
 
+test('character schema accepts i18n file paths and rejects unsafe i18n paths', () => {
+  const parsed = validateCharacterJson({
+    ...validCharacter,
+    i18n: { 'en-US': 'i18n/en-US.json' },
+  });
+  assert.equal(parsed.i18n?.['en-US'], 'i18n/en-US.json');
+  assert.equal(CharacterSchema.safeParse({
+    ...validCharacter,
+    i18n: { 'en-US': '../en-US.json' },
+  }).success, false);
+});
+
 test('character schema accepts runtime renderer functions for built-in characters', () => {
   const parsed = CharacterSchema.parse({
     ...validCharacter,

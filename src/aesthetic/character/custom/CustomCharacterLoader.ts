@@ -1,17 +1,26 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { ZodError } from 'zod';
+import {
+  CharacterSchema,
+  ManifestSchema,
+  type CharacterJson,
+  type Manifest,
+} from '../CharacterSchema.js';
 import type {
   Character,
+  CharacterAssets,
   CharacterBehavior,
   CharacterCompanion,
   CharacterId,
+  CharacterI18n,
+  CharacterPackageInfo,
   CharacterSource,
   CharacterTheme,
   ErrorMessages,
   EasterEggPool,
-  ExplanationStyle,
   PreferredAgentMode,
   ReviewFocus,
   RiskPreference,
@@ -28,6 +37,8 @@ export interface CustomCharacterPaths {
 export interface CustomCharacterLoadError {
   path: string;
   message: string;
+  reason?: string;
+  details?: unknown;
 }
 
 export interface CustomCharacterLoadResult {
@@ -78,20 +89,50 @@ async function loadDirectory(dir: string, source: CharacterSource): Promise<{ ch
 
   const characters: Character[] = [];
   const errors: CustomCharacterLoadError[] = [];
-  const entries = await readdir(dir, { withFileTypes: true });
+
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    errors.push(toLoadError(dir, error, 'Failed to read character directory.'));
+    return { characters, errors };
+  }
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-    const path = join(dir, entry.name);
+    if (entry.name.startsWith('.')) continue;
+
+    const entryPath = join(dir, entry.name);
     try {
-      const raw = JSON.parse(await readFile(path, 'utf-8')) as unknown;
-      characters.push(normalizeCustomCharacter(raw, source));
+      if (entry.isDirectory()) {
+        characters.push(await loadCharacterFromDirectory(entryPath, source));
+      } else if (entry.isFile() && entry.name.endsWith('.json')) {
+        characters.push(await loadLegacyCharacterFile(entryPath, source));
+      }
     } catch (error) {
-      errors.push({ path, message: error instanceof Error ? error.message : String(error) });
+      errors.push(toLoadError(entryPath, error));
     }
   }
 
   return { characters, errors };
+}
+
+async function loadLegacyCharacterFile(filePath: string, source: CharacterSource): Promise<Character> {
+  const raw = await readJsonFile(filePath);
+  return normalizeCustomCharacter(raw, source);
+}
+
+export async function loadCharacterFromDirectory(characterDir: string, source: CharacterSource): Promise<Character> {
+  const manifest = await readOptionalManifest(characterDir);
+  const characterJsonPath = resolveCharacterEntryPath(characterDir, manifest);
+  const raw = await readJsonFile(characterJsonPath);
+  const validatedCharacter = CharacterSchema.parse(raw) as CharacterJson;
+  const packageInfo = manifest ? await createPackageInfo(manifest, characterDir) : validatedCharacter.packageInfo;
+
+  return normalizeValidatedCharacter(validatedCharacter, {
+    source,
+    characterDir,
+    packageInfo,
+  });
 }
 
 export function normalizeCustomCharacter(raw: unknown, source: CharacterSource): Character {
@@ -121,7 +162,143 @@ export function normalizeCustomCharacter(raw: unknown, source: CharacterSource):
     systemPromptPersona: readString(merged, 'systemPromptPersona') || 'You are a customized RoxyCode coding partner. Safety rules always override style.',
     custom: source !== 'builtin',
     source,
+    packageInfo: isCharacterPackageInfo(merged.packageInfo) ? merged.packageInfo : undefined,
+    assets: isCharacterAssets(merged.assets) ? merged.assets : undefined,
+    extensions: isRecord(merged.extensions) ? merged.extensions as Character['extensions'] : undefined,
+    i18n: isRecord(merged.i18n) ? merged.i18n as CharacterI18n : undefined,
+    metadata: isRecord(merged.metadata) ? merged.metadata as Character['metadata'] : undefined,
   };
+}
+
+async function readOptionalManifest(characterDir: string): Promise<Manifest | undefined> {
+  const manifestPath = join(characterDir, 'manifest.json');
+  if (!existsSync(manifestPath)) return undefined;
+  return ManifestSchema.parse(await readJsonFile(manifestPath));
+}
+
+function resolveCharacterEntryPath(characterDir: string, manifest?: Manifest): string {
+  const entryPath = manifest?.contributes?.character ?? manifest?.main ?? 'character.json';
+  const fullPath = resolvePackagePath(characterDir, entryPath, 'character entry');
+  if (!existsSync(fullPath)) {
+    throw new Error(manifest ? `Character entry not found: ${entryPath}` : 'Missing character.json');
+  }
+  return fullPath;
+}
+
+async function createPackageInfo(manifest: Manifest, characterDir: string): Promise<CharacterPackageInfo> {
+  const stats = await stat(characterDir);
+  return {
+    packageName: manifest.name,
+    version: manifest.version,
+    author: manifest.author,
+    license: manifest.license,
+    repository: manifest.repository?.url,
+    installPath: characterDir,
+    installedAt: stats.birthtime.toISOString(),
+  };
+}
+
+async function normalizeValidatedCharacter(
+  character: CharacterJson,
+  options: { source: CharacterSource; characterDir: string; packageInfo?: CharacterPackageInfo },
+): Promise<Character> {
+  return {
+    ...character,
+    id: character.id as CharacterId,
+    statusText: normalizeStatusText(character.statusText),
+    errorMessages: normalizeErrorMessages(character.errorMessages),
+    splash: normalizeSplash(character.splash),
+    companion: normalizeCompanion(character.companion),
+    behavior: normalizeBehavior(character.behavior),
+    easterEggs: normalizeEasterEggs(character.easterEggs),
+    custom: options.source !== 'builtin',
+    source: options.source,
+    packageInfo: options.packageInfo,
+    assets: character.assets ? resolveAssetPaths(character.assets, options.characterDir) : undefined,
+    extensions: character.extensions ? resolveExtensionPaths(character.extensions, options.characterDir) : undefined,
+    i18n: await loadI18n(character.i18n, options.characterDir),
+  };
+}
+
+function resolveAssetPaths(assets: CharacterAssets, baseDir: string): CharacterAssets {
+  const resolveOne = (value?: string) => value ? resolvePackagePath(baseDir, value, 'asset') : undefined;
+  const resolveMany = (values?: string[]) => values?.map(value => resolvePackagePath(baseDir, value, 'asset'));
+
+  return {
+    icon: resolveOne(assets.icon),
+    avatar: resolveOne(assets.avatar),
+    splashArt: resolveMany(assets.splashArt),
+    sprites: assets.sprites ? {
+      idle: resolveMany(assets.sprites.idle),
+      thinking: resolveMany(assets.sprites.thinking),
+      success: resolveMany(assets.sprites.success),
+      warning: resolveMany(assets.sprites.warning),
+      error: resolveMany(assets.sprites.error),
+    } : undefined,
+    sounds: assets.sounds ? {
+      notification: resolveOne(assets.sounds.notification),
+      success: resolveOne(assets.sounds.success),
+      error: resolveOne(assets.sounds.error),
+    } : undefined,
+  };
+}
+
+function resolveExtensionPaths(extensions: NonNullable<Character['extensions']>, baseDir: string): NonNullable<Character['extensions']> {
+  const resolveOne = (value?: string) => value ? resolvePackagePath(baseDir, value, 'extension') : undefined;
+  const resolveMany = (values?: string[]) => values?.map(value => resolvePackagePath(baseDir, value, 'extension'));
+
+  return {
+    hooks: resolveOne(extensions.hooks),
+    workflows: resolveMany(extensions.workflows),
+    prompts: extensions.prompts ? {
+      systemPrompt: resolveOne(extensions.prompts.systemPrompt),
+      planPrompt: resolveOne(extensions.prompts.planPrompt),
+      verificationPrompt: resolveOne(extensions.prompts.verificationPrompt),
+    } : undefined,
+    tools: resolveMany(extensions.tools),
+  };
+}
+
+async function loadI18n(value: unknown, baseDir: string): Promise<CharacterI18n | undefined> {
+  if (!isRecord(value)) return undefined;
+
+  const i18n: CharacterI18n = {};
+  for (const [locale, entry] of Object.entries(value)) {
+    if (typeof entry === 'string') {
+      const fullPath = resolvePackagePath(baseDir, entry, 'i18n');
+      const parsed = await readJsonFile(fullPath);
+      if (!isRecord(parsed)) throw new Error(`i18n file must contain an object: ${entry}`);
+      i18n[locale] = parsed as CharacterI18n[string];
+    } else if (isRecord(entry)) {
+      i18n[locale] = entry as CharacterI18n[string];
+    }
+  }
+
+  return Object.keys(i18n).length > 0 ? i18n : undefined;
+}
+
+function resolvePackagePath(baseDir: string, packagePath: string, label: string): string {
+  if (isAbsolute(packagePath) || /^[a-zA-Z]:[\\/]/.test(packagePath) || /^https?:\/\//i.test(packagePath)) {
+    throw new Error(`Unsafe ${label} path: ${packagePath}`);
+  }
+
+  const resolved = resolve(baseDir, packagePath);
+  const normalizedBase = resolve(baseDir);
+  const relativePath = relative(normalizedBase, resolved);
+  if (relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+    throw new Error(`Unsafe ${label} path escapes character package: ${packagePath}`);
+  }
+
+  return resolved;
+}
+
+async function readJsonFile(filePath: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(filePath, 'utf-8')) as unknown;
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error(`Invalid JSON: ${error.message}`);
+    throw error;
+  }
 }
 
 function normalizeTheme(value: unknown): CharacterTheme {
@@ -144,14 +321,17 @@ function normalizeStatusText(value: unknown): StatusTextMap {
     analyzing: str(raw.analyzing, 'Analyzing'),
     planning: str(raw.planning, 'Planning'),
     executing: str(raw.executing, 'Executing'),
-    reading: file => applyTemplate(str(raw.reading, 'Reading {file}'), { file }),
-    writing: file => applyTemplate(str(raw.writing, 'Writing {file}'), { file }),
-    running: cmd => applyTemplate(str(raw.running, 'Running {cmd}'), { cmd }),
+    reading: toRenderer(raw.reading, 'Reading {file}', ['file']),
+    writing: toRenderer(raw.writing, 'Writing {file}', ['file']),
+    running: toRenderer(raw.running, 'Running {cmd}', ['cmd']),
     searching: str(raw.searching, 'Searching'),
     waiting: str(raw.waiting, 'Waiting'),
     done: str(raw.done, 'Done'),
     error: str(raw.error, 'Error'),
-    step: (current, total, desc) => applyTemplate(str(raw.step, 'Step {current}/{total}: {desc}'), { current, total, desc }),
+    step: (current, total, desc) => {
+      if (typeof raw.step === 'function') return String(raw.step(current, total, desc));
+      return applyTemplate(str(raw.step, 'Step {current}/{total}: {desc}'), { current, total, desc });
+    },
   };
 }
 
@@ -207,11 +387,19 @@ function normalizeErrorMessages(value: unknown): ErrorMessages {
     generic: str(raw.generic, 'Something went wrong.'),
     networkError: str(raw.networkError, 'Network error.'),
     tokenLimit: str(raw.tokenLimit, 'Context limit reached.'),
-    toolFailed: tool => applyTemplate(str(raw.toolFailed, '{tool} failed.'), { tool }),
+    toolFailed: toRenderer(raw.toolFailed, '{tool} failed.', ['tool']),
     permissionDenied: str(raw.permissionDenied, 'Permission denied.'),
     rateLimit: str(raw.rateLimit, 'Rate limit reached.'),
     contextOverflow: str(raw.contextOverflow, 'Context overflow.'),
   };
+}
+
+function toRenderer(value: unknown, fallback: string, keys: string[]): (...args: string[]) => string {
+  if (typeof value === 'function') {
+    return (...args: string[]) => String(value(...args));
+  }
+  const template = str(value, fallback);
+  return (...args: string[]) => applyTemplate(template, Object.fromEntries(keys.map((key, index) => [key, args[index] ?? ''])));
 }
 
 function color(value: unknown, fallback: string): string {
@@ -258,6 +446,27 @@ function deepMerge(base: Record<string, unknown>, override: Record<string, unkno
     out[key] = isRecord(current) && isRecord(value) ? deepMerge(current, value) : value;
   }
   return out;
+}
+
+function isCharacterPackageInfo(value: unknown): value is CharacterPackageInfo {
+  return isRecord(value) && typeof value.packageName === 'string' && typeof value.version === 'string' && isRecord(value.author);
+}
+
+function isCharacterAssets(value: unknown): value is CharacterAssets {
+  return isRecord(value);
+}
+
+function toLoadError(path: string, error: unknown, fallback?: string): CustomCharacterLoadError {
+  const reason = formatError(error, fallback);
+  return { path, message: reason, reason, details: error };
+}
+
+function formatError(error: unknown, fallback = 'Character load failed.'): string {
+  if (error instanceof ZodError) {
+    return error.issues.map(issue => `${issue.path.join('.') || 'root'}: ${issue.message}`).join('; ');
+  }
+  if (error instanceof Error) return error.message;
+  return String(error || fallback);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
