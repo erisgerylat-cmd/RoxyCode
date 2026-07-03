@@ -58,13 +58,14 @@ export interface UninstallResult {
   packageName: string;
   installPath: string;
   scope: 'global' | 'project';
+  characterId?: string;
 }
 
 export interface UpdateResult extends InstallResult {
   previousVersion?: string;
 }
 
-type PackageSource = {
+export type PreparedCharacterPackageSource = {
   path: string;
   cleanup?: () => Promise<void>;
 };
@@ -75,7 +76,7 @@ export class CharacterPackageManager {
   async installPackage(packagePath: string, options: InstallOptions = {}): Promise<InstallResult> {
     const scope = options.global ? 'global' : 'project';
     const installRoot = await this.getInstallRoot(options);
-    const source = await preparePackageSource(packagePath);
+    const source = await prepareCharacterPackageSource(packagePath);
 
     try {
       const manifest = await readPackageManifest(source.path);
@@ -144,21 +145,25 @@ export class CharacterPackageManager {
       throw new Error(`Character package is not installed: ${packageName}`);
     }
 
+    const character = await loadCharacterFromDirectory(targetDir, scope).catch(() => undefined);
     await rm(targetDir, { recursive: true, force: true });
-    return { packageName, installPath: targetDir, scope };
+    return { packageName, installPath: targetDir, scope, characterId: character?.id };
   }
 
   async listInstalledPackages(options: { cwd?: string; paths?: CharacterPackageInstallPaths } = {}): Promise<InstalledCharacterPackage[]> {
     const paths = options.paths ?? getCustomCharacterPaths(options.cwd ?? this.cwd);
     const result: InstalledCharacterPackage[] = [];
-    result.push(...await listInstalledFromRoot(paths.global, 'global'));
     result.push(...await listInstalledFromRoot(paths.project, 'project'));
+    result.push(...await listInstalledFromRoot(paths.global, 'global'));
     return result;
   }
 
-  async getInstalledPackage(packageName: string, options: { cwd?: string; paths?: CharacterPackageInstallPaths } = {}): Promise<InstalledCharacterPackage | undefined> {
+  async getInstalledPackage(packageName: string, options: { cwd?: string; paths?: CharacterPackageInstallPaths; global?: boolean } = {}): Promise<InstalledCharacterPackage | undefined> {
     const packages = await this.listInstalledPackages(options);
-    return packages.find(pkg => pkg.name === packageName);
+    const requiredScope = typeof options.global === 'boolean'
+      ? options.global ? 'global' : 'project'
+      : undefined;
+    return packages.find(pkg => pkg.name === packageName && (!requiredScope || pkg.scope === requiredScope));
   }
 
   private async getInstallRoot(options: InstallOptions | UninstallOptions): Promise<string> {
@@ -189,7 +194,7 @@ export async function readPackageManifest(packageRoot: string): Promise<Manifest
 }
 
 async function readManifestFromAnyPackage(packagePath: string): Promise<Manifest> {
-  const source = await preparePackageSource(packagePath);
+  const source = await prepareCharacterPackageSource(packagePath);
   try {
     return await readPackageManifest(source.path);
   } finally {
@@ -197,19 +202,24 @@ async function readManifestFromAnyPackage(packagePath: string): Promise<Manifest
   }
 }
 
-async function preparePackageSource(packagePath: string): Promise<PackageSource> {
+export async function prepareCharacterPackageSource(packagePath: string): Promise<PreparedCharacterPackageSource> {
   const resolved = resolve(packagePath);
   if (!existsSync(resolved)) throw new Error(`Character package source does not exist: ${packagePath}`);
 
   const extension = extname(resolved).toLowerCase();
   if (extension === '.roxychar' || extension === '.zip') {
     const tempRoot = await mkdtemp(join(tmpdir(), 'roxy-character-package-'));
-    await extractZipSafely(resolved, tempRoot);
-    const packageRoot = await findExtractedPackageRoot(tempRoot);
-    return {
-      path: packageRoot,
-      cleanup: () => rm(tempRoot, { recursive: true, force: true }),
-    };
+    try {
+      await extractZipSafely(resolved, tempRoot);
+      const packageRoot = await findExtractedPackageRoot(tempRoot);
+      return {
+        path: packageRoot,
+        cleanup: () => rm(tempRoot, { recursive: true, force: true }),
+      };
+    } catch (error) {
+      await rm(tempRoot, { recursive: true, force: true });
+      throw error;
+    }
   }
 
   return { path: resolved };

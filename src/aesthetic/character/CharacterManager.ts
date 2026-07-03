@@ -28,6 +28,7 @@ export class CharacterManager implements CharacterPort {
   }
 
   async loadCustomCharacters(): Promise<void> {
+    this.resetRegistryToBuiltIns();
     const result = await loadCustomCharacters(this.cwd);
     this.customPaths = result.paths;
     this.customErrors.length = 0;
@@ -122,6 +123,12 @@ export class CharacterManager implements CharacterPort {
       const character = ALL_CHARACTERS.get(id)!;
       this.register({ ...character, behavior: character.behavior ?? defaultBuiltInBehavior(id), source: 'builtin', custom: false });
     }
+  }
+
+  private resetRegistryToBuiltIns(): void {
+    this.registry.clear();
+    this.order.length = 0;
+    this.registerBuiltIns();
   }
 
   private register(character: Character): void {

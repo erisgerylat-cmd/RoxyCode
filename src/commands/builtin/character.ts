@@ -3,7 +3,8 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CharacterManager } from '../../aesthetic/character/CharacterManager.js';
-import { CHARACTER_ORDER, ALL_CHARACTERS } from '../../aesthetic/character/characters/index.js';
+import { CharacterPackageManager } from '../../aesthetic/character/custom/CharacterPackageManager.js';
+import { validateCharacterPackage } from '../../aesthetic/character/custom/CharacterPackageValidator.js';
 import { characterToTemplate, createCustomCharacterTemplate, serializeCustomCharacterTemplate } from '../../aesthetic/character/custom/CharacterTemplate.js';
 import { ensureProjectCharacterDirectory, isValidCharacterId } from '../../aesthetic/character/custom/CustomCharacterLoader.js';
 import type { Character, CharacterId } from '../../aesthetic/character/types.js';
@@ -44,6 +45,26 @@ export async function handleCharacterCommand(
     return showCharacterPaths(characterManager);
   }
 
+  if (subCommand === 'packages') {
+    return showCharacterPackages(args.slice(1));
+  }
+
+  if (subCommand === 'install') {
+    return installCharacterPackageCommand(args.slice(1), characterManager);
+  }
+
+  if (subCommand === 'uninstall' || subCommand === 'remove') {
+    return uninstallCharacterPackageCommand(args.slice(1), characterManager);
+  }
+
+  if (subCommand === 'update') {
+    return updateCharacterPackageCommand(args.slice(1), characterManager);
+  }
+
+  if (subCommand === 'validate') {
+    return validateCharacterPackageCommand(args.slice(1));
+  }
+
   if (subCommand === 'random') {
     const ids = characterManager.getCharacterList()
       .map(item => item.id)
@@ -63,7 +84,7 @@ export async function handleCharacterCommand(
   }
 
   console.log(chalk.red(`  未知角色或子命令: /character ${subCommand}`));
-  console.log(chalk.dim('  可用: list, info, create, paths, random, roxy, rudeus, eris, sylphiette, nanahoshi, 或自定义角色 id'));
+  console.log(chalk.dim('  可用: list, info, create, paths, packages, install, uninstall, update, validate, random, roxy, rudeus, eris, sylphiette, nanahoshi，或自定义角色 id'));
 }
 
 function showCharacterList(characterManager: CharacterManager): void {
@@ -86,14 +107,14 @@ function showCharacterList(characterManager: CharacterManager): void {
   const errors = characterManager.getCustomLoadErrors();
   if (errors.length > 0) {
     console.log(chalk.yellow(''));
-    console.log(chalk.yellow('  自定义角色加载警告:'));
+    console.log(chalk.yellow('  自定义角色加载警告'));
     for (const error of errors.slice(0, 5)) {
       console.log(chalk.dim(`  - ${error.path}: ${error.message}`));
     }
   }
 
   console.log(chalk.dim(''));
-  console.log(chalk.dim('  用法: /character <id> | /character create <id> | /character info [id] | /character paths'));
+  console.log(chalk.dim('  用法: /character <id> | /character create <id> | /character packages | /character install <path>'));
   console.log('');
 }
 
@@ -111,6 +132,9 @@ function showCharacterInfo(characterManager: CharacterManager, character?: Chara
   console.log(chalk.dim(`  ${c.description}`));
   console.log(`  性格: ${c.personality}`);
   console.log(`  来源: ${c.source ?? 'builtin'}${c.custom ? ' / custom' : ''}`);
+  if (c.packageInfo) {
+    console.log(`  角色包: ${c.packageInfo.packageName}@${c.packageInfo.version}`);
+  }
   console.log('');
   console.log(chalk.bold('  主题色'));
   for (const [key, value] of Object.entries(c.theme)) {
@@ -145,7 +169,7 @@ function showCharacterInfo(characterManager: CharacterManager, character?: Chara
 }
 
 async function createCharacter(args: string[], characterManager: CharacterManager): Promise<void> {
-  const id = args.find(arg => !arg.startsWith('--'));
+  const id = firstPositional(args);
   const force = args.includes('--force');
   const fromCurrent = args.includes('--from-current') || args.includes('--from') && args.includes('current');
 
@@ -193,6 +217,155 @@ function showCharacterPaths(characterManager: CharacterManager): void {
   console.log('');
 }
 
+async function showCharacterPackages(args: string[]): Promise<void> {
+  const scope = parseScope(args);
+  const packages = await new CharacterPackageManager(process.cwd()).listInstalledPackages();
+  const filtered = packages.filter(pkg => {
+    if (scope === 'global') return pkg.scope === 'global';
+    if (scope === 'project') return pkg.scope === 'project';
+    return true;
+  });
+
+  console.log('');
+  console.log(chalk.bold('  RoxyCode 角色包'));
+  if (filtered.length === 0) {
+    console.log(chalk.dim('  暂无已安装角色包。'));
+    console.log(chalk.dim('  使用 /character install ./my-character 或 /character install ./roxy-sensei.roxychar 安装。'));
+    console.log('');
+    return;
+  }
+
+  for (const pkg of filtered) {
+    const scopeLabel = pkg.scope === 'global' ? chalk.cyan('global') : chalk.green('project');
+    console.log(`  ${chalk.bold(pkg.name)} ${chalk.dim(`v${pkg.version}`)} ${scopeLabel}`);
+    console.log(`    displayName: ${pkg.displayName}`);
+    console.log(`    description: ${pkg.description}`);
+    console.log(`    installPath: ${pkg.installPath}`);
+  }
+  console.log('');
+}
+
+async function installCharacterPackageCommand(args: string[], characterManager: CharacterManager): Promise<void> {
+  const packagePath = firstPositional(args);
+  if (!packagePath) {
+    console.log(chalk.red('  缺少角色包路径。'));
+    console.log(chalk.dim('  用法: /character install <path> [--global] [--force]'));
+    return;
+  }
+
+  try {
+    const result = await new CharacterPackageManager(process.cwd()).installPackage(packagePath, {
+      global: args.includes('--global'),
+      force: args.includes('--force'),
+    });
+    await characterManager.loadCustomCharacters();
+
+    console.log(chalk.green('  角色包安装成功'));
+    console.log(`  包名: ${result.manifest.name}`);
+    console.log(`  版本: ${result.manifest.version}`);
+    console.log(`  范围: ${result.scope}`);
+    console.log(`  角色 id: ${result.character.id}`);
+    console.log(chalk.dim(`  下一步: /character ${result.character.id}`));
+  } catch (error) {
+    console.log(chalk.red(`  角色包安装失败: ${errorMessage(error)}`));
+  }
+}
+
+async function uninstallCharacterPackageCommand(args: string[], characterManager: CharacterManager): Promise<void> {
+  const packageName = firstPositional(args);
+  if (!packageName) {
+    console.log(chalk.red('  缺少角色包名。'));
+    console.log(chalk.dim('  用法: /character uninstall <name> [--global]'));
+    return;
+  }
+
+  try {
+    const manager = new CharacterPackageManager(process.cwd());
+    const previousCharacterId = String(characterManager.getCurrentCharacter().id);
+    const installed = await manager.getInstalledPackage(packageName);
+    const result = await manager.uninstallPackage(packageName, {
+      global: args.includes('--global') || installed?.scope === 'global',
+    });
+
+    await characterManager.loadCustomCharacters();
+    if (previousCharacterId === result.characterId || !characterManager.getCharacter(previousCharacterId as CharacterId)) {
+      await characterManager.switchCharacter('roxy');
+    }
+
+    console.log(chalk.green('  角色包已卸载'));
+    console.log(`  包名: ${result.packageName}`);
+    console.log(`  范围: ${result.scope}`);
+    console.log(`  路径: ${result.installPath}`);
+  } catch (error) {
+    console.log(chalk.red(`  角色包卸载失败: ${errorMessage(error)}`));
+  }
+}
+
+async function updateCharacterPackageCommand(args: string[], characterManager: CharacterManager): Promise<void> {
+  const packagePath = firstPositional(args);
+  if (!packagePath) {
+    console.log(chalk.red('  缺少角色包路径。'));
+    console.log(chalk.dim('  用法: /character update <path> [--global]'));
+    return;
+  }
+
+  try {
+    const result = await new CharacterPackageManager(process.cwd()).updatePackage(
+      packagePath,
+      args.includes('--global') ? { global: true } : {},
+    );
+    await characterManager.loadCustomCharacters();
+
+    console.log(chalk.green('  角色包更新成功'));
+    console.log(`  包名: ${result.manifest.name}`);
+    console.log(`  版本: ${result.previousVersion ?? 'unknown'} -> ${result.manifest.version}`);
+    console.log(`  范围: ${result.scope}`);
+    console.log(`  角色 id: ${result.character.id}`);
+  } catch (error) {
+    const message = errorMessage(error);
+    console.log(chalk.red(`  角色包更新失败: ${message}`));
+    if (/not installed/i.test(message)) {
+      console.log(chalk.dim('  该角色包尚未安装，请先使用 /character install <path>。'));
+    }
+  }
+}
+
+async function validateCharacterPackageCommand(args: string[]): Promise<void> {
+  const packagePath = firstPositional(args);
+  if (!packagePath) {
+    console.log(chalk.red('  缺少角色包路径。'));
+    console.log(chalk.dim('  用法: /character validate <path>'));
+    return;
+  }
+
+  try {
+    const result = await validateCharacterPackage(packagePath);
+    console.log('');
+    console.log(chalk.bold(`  验证角色包: ${packagePath}`));
+    if (result.manifest) {
+      console.log(`  包名: ${result.manifest.name}`);
+      console.log(`  版本: ${result.manifest.version}`);
+    }
+    if (result.character) console.log(`  角色 id: ${result.character.id}`);
+
+    for (const error of result.errors) {
+      console.log(chalk.red(`  error ${error.path}: ${error.message}`));
+    }
+    for (const warning of result.warnings) {
+      console.log(chalk.yellow(`  warning ${warning.path}: ${warning.message}`));
+    }
+
+    if (result.success) {
+      console.log(result.warnings.length ? chalk.yellow('  验证通过，但存在 warning。') : chalk.green('  验证通过。'));
+    } else {
+      console.log(chalk.red('  验证失败。'));
+    }
+    console.log('');
+  } catch (error) {
+    console.log(chalk.red(`  角色包验证失败: ${errorMessage(error)}`));
+  }
+}
+
 async function switchTo(id: CharacterId, characterManager: CharacterManager): Promise<void> {
   await characterManager.switchCharacter(id);
   const c = characterManager.getCurrentCharacter();
@@ -217,4 +390,18 @@ function resolveCharacterId(input: string, characterManager: CharacterManager): 
   if (exact) return exact.id;
   const caseInsensitive = characterManager.getCharacterList().find(item => String(item.id).toLowerCase() === normalized);
   return caseInsensitive?.id;
+}
+
+function firstPositional(args: string[]): string | undefined {
+  return args.find(arg => !arg.startsWith('--'));
+}
+
+function parseScope(args: string[]): 'all' | 'global' | 'project' {
+  if (args.includes('--global')) return 'global';
+  if (args.includes('--project')) return 'project';
+  return 'all';
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

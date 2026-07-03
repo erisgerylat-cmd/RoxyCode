@@ -37,6 +37,14 @@ export type {
   UpdateOptions,
   UpdateResult,
 } from './custom/CharacterPackageManager.js';
+export {
+  validateCharacterPackage,
+} from './custom/CharacterPackageValidator.js';
+export type {
+  CharacterPackageValidationIssue,
+  CharacterPackageValidationResult,
+  CharacterPackageValidationSeverity,
+} from './custom/CharacterPackageValidator.js';
 export type {
   Character,
   CharacterId,
