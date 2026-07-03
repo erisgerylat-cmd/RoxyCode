@@ -1,4 +1,4 @@
-﻿export { ProjectInitializer } from './ProjectInitializer.js';
+export { ProjectInitializer, detectProjectProfile } from './ProjectInitializer.js';
 export type {
   ProjectInitOptions,
   ProjectInitResult,

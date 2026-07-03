@@ -17,7 +17,7 @@ export class ProjectInitializer {
   constructor(private readonly cwd: string = process.cwd()) {}
 
   async init(options: ProjectInitOptions = {}, language: Language = 'zh-CN'): Promise<ProjectInitResult> {
-    const profile = await detectProject(this.cwd);
+    const profile = await detectProjectProfile(this.cwd);
     const projectPath = join(this.cwd, PROJECT_JSON_PATH);
     const roxyPath = join(this.cwd, ROXY_MD);
 
@@ -40,7 +40,7 @@ export class ProjectInitializer {
   }
 }
 
-async function detectProject(cwd: string): Promise<ProjectProfile> {
+export async function detectProjectProfile(cwd: string): Promise<ProjectProfile> {
   const packageJson = await readJson(join(cwd, 'package.json'));
   const packageScripts = readPackageScripts(packageJson);
   const dependencies = readPackageDependencies(packageJson);

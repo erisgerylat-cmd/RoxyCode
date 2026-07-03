@@ -12,3 +12,5 @@ export type { SessionEvent, SessionInfo } from './store/SessionStore.js';
 export { microcompactMessages, estimateMessagesTokens } from './context/MicroCompact.js';
 export { SummaryStrategy } from './context/strategies/SummaryStrategy.js';
 export * from './memory/index.js';
+export * from './profile/index.js';
+export * from './project/index.js';

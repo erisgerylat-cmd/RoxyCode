@@ -7,9 +7,9 @@ import {
   isCharacterId,
   isExplanationDepth,
   isModelStrategy,
-  ProfileInitializer,
   type ProfileInitOptions,
 } from '../../profile/index.js';
+import { ProfileOnboarding } from '../../session/profile/index.js';
 
 export async function handleProfileCommand(
   args: string[],
@@ -37,8 +37,8 @@ export async function handleProfileCommand(
     return;
   }
 
-  const initializer = new ProfileInitializer(configManager);
-  const result = await initializer.init({
+  const result = await new ProfileOnboarding().runOnboarding({
+    configManager,
     defaultCharacter: characterManager.getCurrentCharacter().id,
     ...parsed.options,
   });

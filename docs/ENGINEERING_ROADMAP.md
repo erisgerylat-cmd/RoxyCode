@@ -89,21 +89,23 @@ src/engine/agent/AgentLoop.ts
 
 ---
 
-#### 1.2 Profile 系统实现 🔴 高优先级
+#### 1.2 Profile 系统实现 ✅ 核心完成
 
-**当前状态**：30% 完成度
+**当前状态**：80% 完成度
 - ✅ 类型定义存在
-- ❌ ProfileManager 未实现
-- ❌ ProfileOnboarding 未实现
-- ❌ ProjectProfileManager 未实现
-- ❌ RoxyManifest 解析未实现
+- ✅ ProfileManager 已实现
+- ✅ ProfileOnboarding 已实现
+- ✅ ProjectProfileManager 已实现
+- ✅ RoxyManifest 解析已实现
+- ✅ ProjectScanner 已实现
+- ⚠️ 首次启动自动引导尚未接入 UI 启动流程
 
 **实施任务**：
 
 ```typescript
 // Task 1: ProfileManager (2天)
 src/session/profile/ProfileManager.ts
-  - load(): 加载 ~/.roxycode/profile.json
+  - load(): 加载 .roxycode/profile.json
   - save(): 保存用户画像
   - update(): 增量更新
   - getTechStack(): 技术栈偏好
@@ -135,12 +137,12 @@ src/session/project/ProjectScanner.ts
 
 **验收标准**：
 - [ ] 首次启动触发 onboarding
-- [ ] ~/.roxycode/profile.json 正确保存
-- [ ] .roxycode/project.json 自动生成
-- [ ] ROXY.md 解析生效
-- [ ] 项目类型自动识别
+- [x] .roxycode/profile.json 正确保存
+- [x] .roxycode/project.json 自动生成
+- [x] ROXY.md 解析生效
+- [x] 项目类型自动识别
 
-**预期完成度**：30% → 80%
+**完成度**：30% → 80%
 
 ---
 
@@ -458,8 +460,8 @@ Phase 3 完成 (93%)
    - [ ] 集成到 AgentLoop
 
 2. **Profile 系统**
-   - [ ] 实现 ProfileManager.load()
-   - [ ] 实现 ProfileOnboarding
+   - [x] 实现 ProfileManager.load()
+   - [x] 实现 ProfileOnboarding
    - [ ] 首次启动引导
 
 3. **Workflow 引擎**
