@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { CharacterManager } from '../src/aesthetic/character/CharacterManager.js';
 import { CharacterPackageManager } from '../src/aesthetic/character/custom/CharacterPackageManager.js';
 import { packCharacterPackage } from '../src/aesthetic/character/custom/CharacterPackagePacker.js';
+import { verifyCharacterPackageIntegrity } from '../src/aesthetic/character/custom/CharacterPackageIntegrity.js';
 import { createCharacterPackageTemplate } from '../src/aesthetic/character/custom/CharacterPackageTemplate.js';
 import { exportCharacterPackage } from '../src/aesthetic/character/custom/CharacterPackageExporter.js';
 import { loadCharacterFromDirectory } from '../src/aesthetic/character/custom/CustomCharacterLoader.js';
@@ -60,6 +61,8 @@ test('character package packer creates installable roxychar archives with manife
     assert.equal(packed.packageName, 'roxy-sensei');
     assert.match(packed.packagePath, /roxy-sensei-0\.1\.0\.roxychar$/);
     assert.equal(existsSync(packed.packagePath), true);
+    assert.match(packed.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(existsSync(packed.sha256Path), true);
     assert.equal(packed.files.includes('manifest.json'), true);
     assert.equal(packed.files.includes('debug.log'), false);
 
@@ -69,6 +72,14 @@ test('character package packer creates installable roxychar archives with manife
     assert.equal(zip.getEntry('roxy-sensei/manifest.json'), null);
 
     const installCwd = join(root, 'install-project');
+    const verified = await verifyCharacterPackageIntegrity(packed.packagePath);
+    assert.equal(verified.verified, true);
+    assert.equal(verified.expectedSha256, packed.sha256);
+    const mismatch = await verifyCharacterPackageIntegrity(packed.packagePath, {
+      sha256: '0'.repeat(64),
+    });
+    assert.equal(mismatch.verified, false);
+
     const installed = await new CharacterPackageManager(installCwd).installPackage(packed.packagePath, {
       paths: {
         global: join(root, 'global', 'characters'),
@@ -94,6 +105,8 @@ test('character exporter exports built-in metadata and optional roxychar archive
       roxychar: true,
     });
     assert.ok(result.archivePath);
+    assert.match(result.sha256 ?? '', /^[a-f0-9]{64}$/);
+    assert.equal(existsSync(result.sha256Path!), true);
 
     const validation = await validateCharacterPackage(result.packageDir);
     assert.equal(validation.success, true);
@@ -130,10 +143,15 @@ test('character command supports create --package, pack, and export --roxychar',
     const packageDir = join(root, '.roxycode', 'characters', 'my-sensei');
     output = await captureConsole(() => handleCharacterCommand(['pack', '--out', join(root, 'dist'), packageDir], manager));
     assert.match(output, /角色包打包成功/);
+    assert.match(output, /SHA-256/);
     assert.equal(existsSync(join(root, 'dist', 'my-sensei-0.1.0.roxychar')), true);
+
+    output = await captureConsole(() => handleCharacterCommand(['verify', join(root, 'dist', 'my-sensei-0.1.0.roxychar')], manager));
+    assert.match(output, /完整性校验通过/);
 
     output = await captureConsole(() => handleCharacterCommand(['export', 'current', '--out', join(root, 'exports'), '--roxychar'], manager));
     assert.match(output, /角色导出成功/);
+    assert.match(output, /SHA-256/);
     assert.equal(existsSync(join(root, 'exports', 'roxy-0.1.0.roxychar')), true);
   } finally {
     process.chdir(originalCwd);

@@ -31,6 +31,17 @@ export {
   uninstallCharacterPackage,
   updateCharacterPackage,
 } from './character/custom/CharacterPackageManager.js';
+export {
+  assertSha256,
+  computeCharacterPackageSha256,
+  verifyCharacterPackageIntegrity,
+  writeCharacterPackageSha256Sidecar,
+} from './character/custom/CharacterPackageIntegrity.js';
+export type {
+  CharacterPackageIntegrityResult,
+  CharacterPackageVerifyOptions,
+  CharacterPackageVerifyResult,
+} from './character/custom/CharacterPackageIntegrity.js';
 export type {
   InstallOptions,
   InstallResult,

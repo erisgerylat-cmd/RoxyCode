@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { readPackageManifest } from './CharacterPackageManager.js';
+import { writeCharacterPackageSha256Sidecar } from './CharacterPackageIntegrity.js';
 import { validateCharacterPackage, type CharacterPackageValidationIssue } from './CharacterPackageValidator.js';
 
 export interface CharacterPackagePackOptions {
@@ -17,6 +18,8 @@ export interface CharacterPackagePackResult {
   files: string[];
   warnings: CharacterPackageValidationIssue[];
   sizeBytes: number;
+  sha256: string;
+  sha256Path: string;
 }
 
 const MAX_PACKAGE_BYTES = 50 * 1024 * 1024;
@@ -65,6 +68,7 @@ export async function packCharacterPackage(
   await mkdir(outDir, { recursive: true });
   zip.writeZip(outputPath);
   const archiveStat = await stat(outputPath);
+  const integrity = await writeCharacterPackageSha256Sidecar(outputPath);
 
   return {
     packagePath: outputPath,
@@ -73,6 +77,8 @@ export async function packCharacterPackage(
     files: files.map(file => file.relativePath),
     warnings: validation.warnings,
     sizeBytes: archiveStat.size,
+    sha256: integrity.sha256,
+    sha256Path: integrity.sidecarPath!,
   };
 }
 

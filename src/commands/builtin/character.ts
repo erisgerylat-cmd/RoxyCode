@@ -6,6 +6,7 @@ import type { CharacterManager } from '../../aesthetic/character/CharacterManage
 import { exportCharacterPackage } from '../../aesthetic/character/custom/CharacterPackageExporter.js';
 import { CharacterPackageManager } from '../../aesthetic/character/custom/CharacterPackageManager.js';
 import { packCharacterPackage } from '../../aesthetic/character/custom/CharacterPackagePacker.js';
+import { verifyCharacterPackageIntegrity } from '../../aesthetic/character/custom/CharacterPackageIntegrity.js';
 import { createCharacterPackageTemplate } from '../../aesthetic/character/custom/CharacterPackageTemplate.js';
 import { validateCharacterPackage } from '../../aesthetic/character/custom/CharacterPackageValidator.js';
 import { characterToTemplate, createCustomCharacterTemplate, serializeCustomCharacterTemplate } from '../../aesthetic/character/custom/CharacterTemplate.js';
@@ -76,6 +77,10 @@ export async function handleCharacterCommand(
     return packCharacterPackageCommand(args.slice(1));
   }
 
+  if (subCommand === 'verify') {
+    return verifyCharacterPackageCommand(args.slice(1));
+  }
+
   if (subCommand === 'export') {
     return exportCharacterPackageCommand(args.slice(1), characterManager);
   }
@@ -103,7 +108,7 @@ export async function handleCharacterCommand(
   }
 
   console.log(chalk.red(`  未知角色或子命令: /character ${subCommand}`));
-  console.log(chalk.dim('  可用: list, info, create, paths, packages, install, uninstall, update, validate, pack, export, marketplace, random, roxy, rudeus, eris, sylphiette, nanahoshi，或自定义角色 id'));
+  console.log(chalk.dim('  可用: list, info, create, paths, packages, install, uninstall, update, validate, pack, verify, export, marketplace, random, roxy, rudeus, eris, sylphiette, nanahoshi，或自定义角色 id'));
 }
 
 function showCharacterList(characterManager: CharacterManager): void {
@@ -426,12 +431,44 @@ async function packCharacterPackageCommand(args: string[]): Promise<void> {
     console.log(`  版本: ${result.version}`);
     console.log(`  文件数: ${result.files.length}`);
     console.log(`  输出: ${result.packagePath}`);
+    console.log(`  SHA-256: ${result.sha256}`);
+    console.log(`  校验文件: ${result.sha256Path}`);
     if (result.warnings.length > 0) {
       console.log(chalk.yellow(`  warning: ${result.warnings.length} 条，请用 /character validate 查看详情。`));
     }
-    console.log(chalk.dim(`  下一步: /character install ${result.packagePath}`));
+    console.log(chalk.dim(`  下一步: /character verify ${result.packagePath}`));
+    console.log(chalk.dim(`  安装: /character install ${result.packagePath}`));
   } catch (error) {
     console.log(chalk.red(`  角色包打包失败: ${errorMessage(error)}`));
+  }
+}
+
+async function verifyCharacterPackageCommand(args: string[]): Promise<void> {
+  const packagePath = firstPositional(args);
+  if (!packagePath) {
+    console.log(chalk.red('  缺少角色包文件路径。'));
+    console.log(chalk.dim('  用法: /character verify <file.roxychar> [--sha256 <hash>] [--sidecar <file.sha256>]'));
+    return;
+  }
+
+  try {
+    const result = await verifyCharacterPackageIntegrity(packagePath, {
+      sha256: optionValue(args, '--sha256'),
+      sidecarPath: optionValue(args, '--sidecar'),
+    });
+    console.log('');
+    console.log(chalk.bold(`  校验角色包: ${result.path}`));
+    console.log(`  SHA-256: ${result.sha256}`);
+    if (result.expectedSha256) {
+      console.log(`  期望值: ${result.expectedSha256}`);
+      console.log(result.verified ? chalk.green('  完整性校验通过。') : chalk.red('  完整性校验失败，请不要安装该角色包。'));
+    } else {
+      console.log(chalk.yellow('  未提供期望 SHA-256，也未找到 .sha256 文件。'));
+      console.log(chalk.dim(`  可使用: /character verify ${result.path} --sha256 ${result.sha256}`));
+    }
+    console.log('');
+  } catch (error) {
+    console.log(chalk.red(`  角色包完整性校验失败: ${errorMessage(error)}`));
   }
 }
 
@@ -462,6 +499,9 @@ async function exportCharacterPackageCommand(args: string[], characterManager: C
     console.log(`  包目录: ${result.packageDir}`);
     if (result.archivePath) {
       console.log(`  归档: ${result.archivePath}`);
+      if (result.sha256) console.log(`  SHA-256: ${result.sha256}`);
+      if (result.sha256Path) console.log(`  校验文件: ${result.sha256Path}`);
+      console.log(chalk.dim(`  下一步: /character verify ${result.archivePath}`));
       console.log(chalk.dim(`  下一步: /character install ${result.archivePath}`));
     } else {
       console.log(chalk.dim(`  下一步: /character validate ${result.packageDir}`));
@@ -625,7 +665,7 @@ function optionValue(args: string[], name: string): string | undefined {
 }
 
 function optionTakesValue(name: string): boolean {
-  return name === '--out';
+  return name === '--out' || name === '--sha256' || name === '--sidecar';
 }
 
 function errorMessage(error: unknown): string {

@@ -12,6 +12,8 @@ export interface CharacterPackageExportOptions {
 export interface CharacterPackageExportResult {
   packageDir: string;
   archivePath?: string;
+  sha256?: string;
+  sha256Path?: string;
   template: CharacterPackageTemplateResult;
 }
 
@@ -36,7 +38,13 @@ export async function exportCharacterPackage(
     outDir: options.outDir,
     force: options.force,
   });
-  return { packageDir, archivePath: packed.packagePath, template };
+  return {
+    packageDir,
+    archivePath: packed.packagePath,
+    sha256: packed.sha256,
+    sha256Path: packed.sha256Path,
+    template,
+  };
 }
 
 function withExportMetadata(character: Character): Character {
