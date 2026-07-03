@@ -278,7 +278,93 @@ Thumbs.db
 - `CC-BY-4.0`：创作共享，允许商用但需署名。
 - `CC-BY-NC-4.0`：非商业用途，适合多数同人资源。
 
-## 7. 安全与权限边界
+## 7. Schema、市场索引与完整性
+
+### 7.1 JSON Schema
+
+RoxyCode 维护两份静态 JSON Schema：
+
+- `schemas/manifest.v1.json`：对应 `manifest.json`。
+- `schemas/character.v1.json`：对应角色包里的 `character.json`。
+
+生成命令：
+
+```bash
+pnpm run schema:characters
+```
+
+这两份 schema 从 `src/aesthetic/character/CharacterSchema.ts` 中的 Zod schema 生成。运行时 `CharacterSchema` 仍允许内置角色使用函数型 renderer；角色包文件使用 `CharacterPackageJsonSchema`，只允许字符串模板。这样既保留 RoxyCode 内置角色的动态能力，又让外部角色包保持纯 JSON、可校验、可被编辑器提示。
+
+### 7.2 marketplace.json
+
+角色包市场索引用 `marketplace.json` 描述一组可发现角色包。当前阶段支持本地文件和本地目录索引，远程 URL 只做元数据展示与完整性提示。
+
+示例：
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "personal-characters",
+  "displayName": "个人角色包市场",
+  "description": "适合中文开发者的 RoxyCode 二次元角色包合集。",
+  "owner": {
+    "name": "tanghao"
+  },
+  "packages": [
+    {
+      "name": "roxy-sensei",
+      "version": "1.2.0",
+      "displayName": "洛琪希老师",
+      "description": "温柔耐心的编程导师角色包。",
+      "source": "./packages/roxy-sensei",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "categories": ["anime", "teaching"],
+      "tags": ["beginner-friendly", "chinese-first"]
+    }
+  ]
+}
+```
+
+命令：
+
+```text
+/character marketplace validate ./marketplace.json
+/character marketplace list ./marketplace.json
+```
+
+校验内容：
+
+- `marketplace.json` schema。
+- 包名、版本、展示信息。
+- 重复 `name@version`。
+- 本地 source 是否存在。
+- 本地 source 的角色包是否能通过 `/character validate`。
+- entry 中 `name/version/displayName` 与包内 `manifest.json` 是否一致。
+- 远程 URL 是否提供 SHA-256。
+
+### 7.3 SHA-256 完整性校验
+
+`.roxychar` 打包时会自动计算 SHA-256，并输出同名 `.sha256` 文件：
+
+```text
+/character pack .roxycode/characters/roxy-sensei --out ./dist
+```
+
+输出：
+
+- `dist/roxy-sensei-1.2.0.roxychar`
+- `dist/roxy-sensei-1.2.0.roxychar.sha256`
+
+安装前可执行：
+
+```text
+/character verify ./dist/roxy-sensei-1.2.0.roxychar
+/character verify ./dist/roxy-sensei-1.2.0.roxychar --sha256 <hash>
+```
+
+RoxyCode 当前只做完整性校验，不把 SHA-256 当作“作者可信”的证明。它能证明文件未被意外篡改，但不能证明发布者身份。后续远程 marketplace 和公钥签名会在这个基础上继续扩展。
+
+## 8. 安全与权限边界
 
 角色包不能直接获得额外工具权限。即使角色包贡献 hooks、workflows、prompts 或未来 tools，也必须进入 RoxyCode 已有链路：
 
@@ -300,7 +386,7 @@ Character Package
 - 可执行二进制文件，除非未来明确引入签名与信任策略。
 - 远程脚本自动执行。
 
-## 8. 与 Claude Code 的对照
+## 9. 与 Claude Code 的对照
 
 Claude Code 参考点：
 
@@ -316,14 +402,14 @@ RoxyCode 选择：
 - 将插件生态中的“可安装能力”收敛成中文用户更容易理解的“角色包”。
 - 角色包可以影响审美、解释风格、审查重点、风险偏好和工作流默认倾向。
 - 角色包不能绕过工具权限、路径限制、高危二次确认和审计日志。
+- RoxyCode 额外提供静态 JSON Schema、中文 marketplace 校验命令和 SHA-256 sidecar，优先降低中文角色包作者的打包与发布门槛。
 
-## 9. 后续版本计划
+## 10. 后续版本计划
 
 v1.1 可扩展内容：
 
-- `schemas/manifest.v1.json` 与 `schemas/character.v1.json`。
-- `/character validate <path>`。
-- `/character pack` 与 `/character install`。
-- 角色包签名与来源信任策略。
-- 角色包 marketplace 索引。
 - 资源尺寸、编码、路径安全的自动校验。
+- 远程 marketplace 注册、缓存、刷新与移除。
+- 从 marketplace 直接安装角色包。
+- 公钥签名、作者身份校验与可信来源策略。
+- marketplace 依赖解析和跨市场依赖 allowlist。
