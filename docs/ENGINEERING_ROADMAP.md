@@ -188,9 +188,16 @@ src/workflow/WorkflowContext.ts
 
 ---
 
-### Phase 2: 工具与命令系统增强（P1，1-2周）
+### Phase 2: 工具与命令系统增强 ✅ 已完成
 
-#### 2.1 工具系统流式化
+#### 2.1 工具系统流式化 ✅ 已完成
+
+**当前状态**：95% 完成度
+- ✅ `ToolStream` / `ToolStreamEvent` 已定义
+- ✅ `concurrencySafe` / `destructive` 静态标记已接入
+- ✅ read_file、execute_command、grep_search 等内置工具已支持流式进度
+- ✅ StreamingToolExecutor 已使用并发安全标记调度工具
+- ✅ MCP 工具适配器已映射 read-only/destructive/open-world 元数据
 
 **实施任务**：
 
@@ -227,13 +234,21 @@ src/tool/builtin/grepSearch.ts
 ```
 
 **验收标准**：
-- [ ] 所有内置工具支持流式进度
-- [ ] concurrencySafe 标记用于多 Agent
-- [ ] destructive 影响权限判断
+- [x] 所有内置工具支持流式进度
+- [x] concurrencySafe 标记用于多 Agent
+- [x] destructive 影响权限判断
 
 ---
 
-#### 2.2 命令系统动态加载
+#### 2.2 命令系统动态加载 ✅ 已完成
+
+**当前状态**：95% 完成度
+- ✅ WorkflowCommandSource 已实现
+- ✅ PluginCommandSource 已实现
+- ✅ SkillCommandSource 已实现
+- ✅ CommandLoader 聚合所有动态来源
+- ✅ CommandWatcher 支持开发模式热重载
+- ✅ CommandRegistry 支持动态注册、替换、注销
 
 **实施任务**：
 
@@ -268,9 +283,9 @@ src/commands/CommandWatcher.ts
 ```
 
 **验收标准**：
-- [ ] Workflow/Plugin/Skill 命令自动生成
-- [ ] 热重载生效（开发模式）
-- [ ] `/help` 显示所有来源命令
+- [x] Workflow/Plugin/Skill 命令自动生成
+- [x] 热重载生效（开发模式）
+- [x] `/help` 显示所有来源命令
 
 ---
 
