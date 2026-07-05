@@ -12,7 +12,7 @@
 | **命令系统** | 100% | 90% | 95% | ⚠️ 缺动态加载、热重载 |
 | **Hook系统** | 100% | 98% | 100% | ✅ 基本完备 |
 | **Memory系统** | 100% | 30% | 85% | 🔴 最大缺口 |
-| **MCP支持** | 100% | 90% | 95% | ⚠️ 缺多协议、OAuth |
+| **MCP支持** | 100% | 95% | 97% | ✅ 多协议、OAuth、插件沙箱执行链已完成；keychain/SDK 兼容待增强 |
 | **配置管理** | 100% | 70% | 85% | ⚠️ 缺多层级、热重载 |
 | **Profile系统** | 100% | 30% | 80% | 🔴 核心缺失 |
 | **Workflow引擎** | 100% | 60% | 85% | 🔴 缺执行器 |
@@ -297,6 +297,7 @@ src/commands/CommandWatcher.ts
 - ✅ 支持 stdio、sse、http、streamable-http、ws、websocket 六种传输配置
 - ✅ OAuth PKCE 流程已实现
 - ✅ TokenStore 已实现可替换 backend 和本地 JSON 持久化
+- ✅ 插件 MCP server 已接入 `${ROXY_PLUGIN_ROOT}`/`${ROXY_PLUGIN_ID}` 变量解析、stdio 路径沙箱和远程网络权限检查
 - ⚠️ 系统 keychain 后端作为后续安全增强项保留
 
 ```typescript
@@ -322,6 +323,7 @@ src/mcp/auth/TokenStore.ts
 - [x] 支持 6 种传输协议
 - [x] OAuth 流程完整
 - [x] TokenStore 可用（后续升级系统 keychain）
+- [x] 插件 MCP server 不能绕过插件沙箱边界
 
 ---
 
@@ -428,7 +430,7 @@ Phase 2 完成 (92%)
   - 命令系统: 90% → 95%
     ↓
 Phase 3 完成 (93%)
-  - MCP: 90% → 95%
+  - MCP: 95% → 97%
   - 配置: 70% → 85%
   - Character: 88% → 95%
     ↓
@@ -449,7 +451,7 @@ Phase 3 完成 (93%)
 | Workflow | 60% | 85% | 独立执行引擎、条件循环 |
 | 工具流式 | 0% | 95% | 所有工具支持进度反馈 |
 | 命令动态 | 50% | 95% | Workflow/Plugin/Skill 自动加载 |
-| MCP 协议 | 50% | 95% | 6 种传输 + OAuth |
+| MCP 协议 | 95% | 97% | 6 种传输 + OAuth + 插件沙箱执行链 |
 | Character CLI | 60% | 95% | 完整包管理命令 |
 
 ### 工程质量

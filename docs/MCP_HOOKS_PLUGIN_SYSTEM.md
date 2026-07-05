@@ -199,6 +199,27 @@ Manifest 示例：
 
 对照 Claude Code：Claude Code 插件支持 marketplace、缓存、依赖、commands/agents/hooks/MCP/settings/output styles，并通过 `/reload-plugins` 统一刷新运行态。RoxyCode 当前先支持本地 manifest，并把插件命令接入统一 `CommandLoader`；开发态可通过 `ROXY_COMMAND_WATCH=1` 热重载插件命令。这是“个人 Claude Code”产品化的第一步，后续可以自然扩展到插件市场、角色包、主题包、国产模型预设包。
 
+## 插件沙箱执行链
+
+本轮优化把插件沙箱从“加载 metadata”推进到“执行链实际生效”。对照 Claude Code：
+
+- Claude Code 的 `loadPluginCommands.ts` 在插件命令 prompt 进入模型前替换 `${CLAUDE_PLUGIN_ROOT}` 等变量，并避免把敏感用户配置直接暴露给模型。
+- Claude Code 的 `loadPluginHooks.ts` 把插件 Hook 注册为携带 `pluginRoot/pluginId` 的内部 matcher，并用原子 clear + register 避免刷新窗口期。
+- Claude Code 的 `mcpPluginIntegration.ts` 在插件 MCP server 合并进运行态前解析插件变量和用户配置。
+
+RoxyCode 当前实现：
+
+- `src/plugin/PluginVariables.ts`：统一渲染 `${ROXY_PLUGIN_ROOT}`、`${ROXY_PLUGIN_ID}`，并在替换前校验 `${ROXY_PLUGIN_ROOT}/../...` 这类路径逃逸。
+- `src/plugin/PluginCommands.ts`：插件 slash command 在调用 Agent 前先走变量渲染和路径校验。
+- `src/hooks/HookManager.ts`：插件 command hook 默认以插件根目录作为 cwd，并注入 `ROXY_PLUGIN_ROOT/ROXY_PLUGIN_ID`；prompt、agent、character、http hook 统一支持插件变量；http hook 额外校验 `allowNetworkAccess/allowedHosts`。
+- `src/mcp/McpPluginSandbox.ts`：插件 MCP server 在 loader 和 transport factory 两层都做变量解析与沙箱守门；stdio 绝对可执行路径必须在插件允许路径内，远程 MCP 必须符合插件网络权限。
+
+设计取舍：
+
+- 优势：插件贡献命令、Hooks、MCP 时不会天然获得项目 cwd、任意本地路径或任意网络权限；即使绕过 loader 直接构造 MCP transport，运行态也会再次检查。
+- 劣势：相比 Claude Code 的成熟插件生态，RoxyCode 目前还没有 marketplace 信任策略、签名、依赖解析、插件热刷新总线和更细粒度的 per-command 权限声明。
+- RoxyCode 特色：错误边界更适合中文用户解释，后续可以结合角色系统把“为什么危险”用角色语气讲清楚，但角色不能提升权限或绕过 `PermissionGuard`。
+
 ## 中文向导命令
 
 新增命令：
