@@ -44,6 +44,64 @@ test('mcp loader preserves stdio server behavior', async () => {
   assert.equal(describeMcpEndpoint(result.servers[0]), 'node server.js');
 });
 
+test('mcp loader resolves plugin sandbox variables and rejects root escapes', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-mcp-plugin-loader-'));
+  try {
+    const pluginRoot = join(cwd, 'plugins', 'demo');
+    const config = createConfigWithServers({});
+    const result = await new McpConfigLoader({
+      cwd,
+      config,
+      pluginServers: {
+        plugin_demo_local: {
+          type: 'stdio',
+          command: 'node',
+          args: ['${ROXY_PLUGIN_ROOT}/server.cjs', '${ROXY_PLUGIN_ID}'],
+          env: {
+            ROXY_PLUGIN_ROOT: 'spoofed',
+            DATA_DIR: '${ROXY_PLUGIN_ROOT}/data',
+          },
+          pluginId: 'demo',
+          pluginRoot,
+          pluginSandbox: createPluginSandbox(pluginRoot),
+        } as unknown as MCPServerConfig,
+      },
+    }).load();
+
+    assert.equal(result.errors.length, 0);
+    const server = result.servers[0];
+    assert.equal(server.name, 'plugin_demo_local');
+    assert.equal(server.source, 'plugin');
+    assert.ok(server.args?.[0].includes(pluginRoot));
+    assert.match(server.args?.[0] ?? '', /server\.cjs$/);
+    assert.equal(server.args?.[1], 'demo');
+    assert.equal(server.env?.ROXY_PLUGIN_ROOT, pluginRoot);
+    assert.equal(server.env?.ROXY_PLUGIN_ID, 'demo');
+    assert.ok(server.env?.DATA_DIR.includes(pluginRoot));
+
+    const rejected = await new McpConfigLoader({
+      cwd,
+      config,
+      pluginServers: {
+        plugin_demo_bad: {
+          type: 'stdio',
+          command: 'node',
+          args: ['${ROXY_PLUGIN_ROOT}/../secret.cjs'],
+          pluginId: 'demo',
+          pluginRoot,
+          pluginSandbox: createPluginSandbox(pluginRoot),
+        } as unknown as MCPServerConfig,
+      },
+    }).load();
+
+    assert.equal(rejected.servers.length, 0);
+    assert.equal(rejected.errors.length, 1);
+    assert.match(rejected.errors[0].message, /outside its sandbox/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test('mcp loader validates and lists six transport protocol configs', async () => {
   const config = createConfigWithServers({
     remoteHttp: {
@@ -156,6 +214,37 @@ test('mcp transport factory creates clients for six configured protocols', () =>
   }
 });
 
+test('mcp transport factory enforces plugin sandbox boundaries', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-mcp-plugin-transport-'));
+  try {
+    const pluginRoot = join(cwd, 'plugins', 'demo');
+    const pluginSandbox = createPluginSandbox(pluginRoot);
+
+    assert.throws(() => createMcpTransport({
+      name: 'plugin_remote',
+      source: 'plugin',
+      type: 'http',
+      url: 'https://example.com/mcp',
+      pluginId: 'demo',
+      pluginRoot,
+      pluginSandbox,
+    }, cwd), /network access denied/);
+
+    assert.throws(() => createMcpTransport({
+      name: 'plugin_local',
+      source: 'plugin',
+      type: 'stdio',
+      command: join(cwd, 'outside-server.cjs'),
+      args: [],
+      pluginId: 'demo',
+      pluginRoot,
+      pluginSandbox,
+    }, cwd), /outside its sandbox/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test('http mcp transport performs initialize, tools/list, and tools/call JSON-RPC requests', async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ url: string; body: any; headers: Record<string, string> }> = [];
@@ -254,4 +343,15 @@ test('pkce verifier and challenge are url-safe', () => {
 function jsonResponse(value: unknown, status = 200): Response {
   if (value === '') return new Response('', { status });
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+}
+
+function createPluginSandbox(pluginRoot: string) {
+  return {
+    pluginId: 'demo',
+    pluginRoot,
+    manifestPath: join(pluginRoot, 'plugin.json'),
+    allowedPaths: [pluginRoot],
+    allowNetworkAccess: false,
+    allowedHosts: [],
+  };
 }

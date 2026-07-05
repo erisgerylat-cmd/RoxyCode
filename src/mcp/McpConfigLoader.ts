@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, isAbsolute, resolve } from 'node:path';
 import type { MCPOAuthConfig, MCPServerConfig, MCPTransportType, RoxyCodeConfig } from '../core/types/config.js';
+import { renderPluginMcpConfig } from './McpPluginSandbox.js';
 import type { McpJsonFile, McpLoadError, McpLoadResult, McpServerDefinition } from './types.js';
 
 export interface McpConfigLoaderOptions {
@@ -93,8 +94,14 @@ function addNormalizedServer(
   errors.push({ source, message: serverName ? `MCP server "${serverName}": ${result.error}` : result.error });
 }
 
-function normalizeServer(name: string, config: MCPServerConfig, source: 'config' | 'plugin'): NormalizeResult {
-  if (!config || typeof config !== 'object') return { error: 'MCP server config must be an object.' };
+function normalizeServer(name: string, rawConfig: MCPServerConfig, source: 'config' | 'plugin'): NormalizeResult {
+  if (!rawConfig || typeof rawConfig !== 'object') return { error: 'MCP server config must be an object.' };
+  let config = rawConfig;
+  try {
+    if (source === 'plugin') config = renderPluginMcpConfig(rawConfig, `MCP server ${name}`);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
   const type = normalizeTransportType(config.type);
   const normalizedName = normalizeServerName(name);
   const base = {
