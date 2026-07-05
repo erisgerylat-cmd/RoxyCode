@@ -194,6 +194,123 @@ test('character hook injects behavior overlay without changing permissions or in
   assert.match(context, /不能 approve\/allow 工具调用/);
   assert.equal((runs[0] as { executions: Array<{ kind: string }> }).executions[0].kind, 'character');
 });
+
+test('plugin command hooks run from plugin root with sandbox variables', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-hook-plugin-command-'));
+  try {
+    const pluginRoot = join(cwd, 'plugins', 'demo');
+    await mkdir(pluginRoot, { recursive: true });
+    await writeFile(join(pluginRoot, 'hook.cjs'), [
+      'console.log(JSON.stringify({',
+      '  additionalContext: `cwd=${process.cwd()};root=${process.env.ROXY_PLUGIN_ROOT};id=${process.argv[2]}`',
+      '}))',
+    ].join('\n'), 'utf8');
+
+    const manager = new HookManager({
+      hooks: [{
+        id: 'plugin-command',
+        event: 'before_prompt',
+        kind: 'command',
+        command: 'node',
+        args: ['${ROXY_PLUGIN_ROOT}/hook.cjs', '${ROXY_PLUGIN_ID}'],
+        pluginId: 'demo',
+        pluginRoot,
+        pluginSandbox: {
+          pluginId: 'demo',
+          pluginRoot,
+          manifestPath: join(pluginRoot, 'plugin.json'),
+          allowedPaths: [pluginRoot],
+          allowNetworkAccess: false,
+          allowedHosts: [],
+        },
+      }],
+    });
+
+    const result = await manager.run('before_prompt', basePayload(cwd));
+
+    assert.equal(result.blocked, false);
+    const pluginContext = result.additionalContexts.join('\n');
+    assert.ok(pluginContext.includes(`cwd=${pluginRoot}`));
+    assert.ok(pluginContext.includes(`root=${pluginRoot}`));
+    assert.match(pluginContext, /id=demo/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('plugin prompt hooks reject plugin root escapes', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-hook-plugin-prompt-'));
+  try {
+    const pluginRoot = join(cwd, 'plugins', 'demo');
+    await mkdir(pluginRoot, { recursive: true });
+    const manager = new HookManager({
+      hooks: [{
+        id: 'plugin-prompt-escape',
+        event: 'before_prompt',
+        kind: 'prompt',
+        prompt: 'Read ${ROXY_PLUGIN_ROOT}/../secret.md',
+        blocking: true,
+        pluginId: 'demo',
+        pluginRoot,
+        pluginSandbox: {
+          pluginId: 'demo',
+          pluginRoot,
+          manifestPath: join(pluginRoot, 'plugin.json'),
+          allowedPaths: [pluginRoot],
+          allowNetworkAccess: false,
+          allowedHosts: [],
+        },
+      }],
+    });
+
+    const result = await manager.run('before_prompt', basePayload(cwd));
+
+    assert.equal(result.blocked, true);
+    assert.match(result.reason ?? '', /outside its sandbox/);
+    assert.equal(result.executions[0].outcome, 'error');
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('plugin http hooks respect sandbox network permissions', async () => {
+  const pluginRoot = join(process.cwd(), '.roxycode', 'plugins', 'demo');
+  const baseHook: RoxyHookDefinition = {
+    id: 'plugin-http',
+    event: 'after_response',
+    kind: 'http',
+    url: 'https://example.com/hook',
+    blocking: true,
+    pluginId: 'demo',
+    pluginRoot,
+    pluginSandbox: {
+      pluginId: 'demo',
+      pluginRoot,
+      manifestPath: join(pluginRoot, 'plugin.json'),
+      allowedPaths: [pluginRoot],
+      allowNetworkAccess: false,
+      allowedHosts: [],
+    },
+  };
+
+  const noNetwork = await new HookManager({ hooks: [baseHook] }).run('after_response', basePayload(process.cwd()));
+  assert.equal(noNetwork.blocked, true);
+  assert.match(noNetwork.reason ?? '', /network access denied/i);
+
+  const wrongHost = await new HookManager({
+    hooks: [{
+      ...baseHook,
+      pluginSandbox: {
+        ...baseHook.pluginSandbox!,
+        allowNetworkAccess: true,
+        allowedHosts: ['api.example.com'],
+      },
+    }],
+  }).run('after_response', basePayload(process.cwd()));
+  assert.equal(wrongHost.blocked, true);
+  assert.match(wrongHost.reason ?? '', /allowed hosts/i);
+});
+
 test('http hook allows localhost only when explicitly enabled and sanitizes env headers', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'roxy-hook-http-'));
   const previous = process.env.ROXY_HOOK_TEST_TOKEN;

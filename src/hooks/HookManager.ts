@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
+import { isAbsolute } from 'node:path';
 import type { LLMProvider } from '../core/types/llm.js';
 import { systemMessage, userMessage } from '../core/types/message.js';
 import type { CharacterBehavior } from '../aesthetic/character/types.js';
+import { createPluginSandboxGuard, renderPluginVariables } from '../plugin/PluginVariables.js';
 import type {
   HookExecutionRecord,
   HookProtocolOutput,
@@ -116,7 +118,11 @@ export class HookManager {
 
   private async executeCommandHook(hook: RoxyHookDefinition, payload: HookRunPayload): Promise<HookRunResult> {
     if (!hook.command) throw new Error('Command hook requires command.');
-    const output = await runProcess(hook.command, hook.args ?? [], payload.cwd, hook.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS, this.signal);
+    const command = renderHookPluginVariables(hook, hook.command, `hook ${hook.id} command`);
+    const args = (hook.args ?? []).map((arg, index) => renderHookPluginVariables(hook, arg, `hook ${hook.id} arg ${index + 1}`));
+    assertPluginHookCommandAllowed(hook, command);
+    const cwd = hook.pluginSandbox?.pluginRoot ?? payload.cwd;
+    const output = await runProcess(command, args, cwd, hook.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS, this.signal, getPluginHookEnv(hook));
     const protocol = parseHookProtocolOutput(output.stdout);
     const contexts = contextsFromOutput(hook, output.stdout, protocol);
     const reason = protocol?.reason ?? protocol?.stopReason ?? trimForRecord(output.stderr || output.stdout || String(output.exitCode));
@@ -147,7 +153,7 @@ export class HookManager {
 
   private async executePromptHook(hook: RoxyHookDefinition, payload: HookRunPayload): Promise<HookRunResult> {
     if (!hook.prompt) throw new Error('Prompt hook requires prompt.');
-    const prompt = renderTemplate(hook.prompt, payload);
+    const prompt = renderHookTemplate(hook, hook.prompt, payload);
     if (!this.llmProvider) {
       return { blocked: false, additionalContexts: [`[hook:${hook.id}]\n${truncateContext(prompt)}`], executions: [] };
     }
@@ -173,7 +179,9 @@ export class HookManager {
 
   private async executeHttpHook(hook: RoxyHookDefinition, payload: HookRunPayload): Promise<HookRunResult> {
     if (!hook.url) throw new Error('HTTP hook requires url.');
-    const parsed = new URL(hook.url);
+    const url = renderHookPluginVariables(hook, hook.url, `hook ${hook.id} url`);
+    assertPluginHookNetworkAllowed(hook, url);
+    const parsed = new URL(url);
     if (parsed.protocol !== 'https:' && !(hook.allowInsecureHttp && isLocalhost(parsed.hostname))) {
       throw new Error('HTTP Hook 默认只允许 https；localhost 调试必须设置 allowInsecureHttp=true。');
     }
@@ -184,9 +192,9 @@ export class HookManager {
     const abort = () => controller.abort();
     this.signal?.addEventListener('abort', abort, { once: true });
     try {
-      const response = await fetch(hook.url, {
+      const response = await fetch(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...sanitizeHeaders(hook.headers ?? {}, new Set(hook.allowedEnvVars ?? [])) },
+        headers: { 'content-type': 'application/json', ...sanitizeHeaders(renderHookHeaders(hook), new Set(hook.allowedEnvVars ?? [])) },
         body: JSON.stringify({ hook: hook.id, event: hook.event, payload }),
         signal: controller.signal,
         redirect: 'error',
@@ -210,7 +218,7 @@ export class HookManager {
 
   private async executeAgentHook(hook: RoxyHookDefinition, payload: HookRunPayload): Promise<HookRunResult> {
     if (!hook.prompt) throw new Error('Agent hook requires prompt.');
-    const rendered = renderTemplate(hook.prompt, payload);
+    const rendered = renderHookTemplate(hook, hook.prompt, payload);
     const context = payload.language === 'en-US'
       ? `[hook:${hook.id}] Agent hook task queued as context:\n${truncateContext(rendered)}`
       : `[hook:${hook.id}] Agent Hook 已作为上下文注入：\n${truncateContext(rendered)}`;
@@ -238,7 +246,7 @@ function mergeCharacterBehavior(hook: RoxyHookDefinition): Partial<CharacterBeha
 function renderCharacterOverlay(hook: RoxyHookDefinition, payload: HookRunPayload, behavior: Partial<CharacterBehavior>): string {
   const zh = payload.language !== 'en-US';
   const hasBehavior = Object.keys(behavior).length > 0;
-  const renderedPrompt = hook.prompt ? renderTemplate(hook.prompt, payload) : '';
+  const renderedPrompt = hook.prompt ? renderHookTemplate(hook, hook.prompt, payload) : '';
   if (!hasBehavior && !renderedPrompt) return '';
 
   const characterId = payload.characterId ?? hook.characterId ?? 'unknown';
@@ -402,6 +410,48 @@ function matchTarget(event: RoxyHookEvent, payload: HookRunPayload): string {
   }
 }
 
+function renderHookTemplate(hook: RoxyHookDefinition, template: string, payload: HookRunPayload): string {
+  return renderHookPluginVariables(hook, renderTemplate(template, payload), `hook ${hook.id} template`);
+}
+
+function renderHookPluginVariables(hook: RoxyHookDefinition, value: string, owner: string): string {
+  return renderPluginVariables(value, hook.pluginSandbox, owner);
+}
+
+function renderHookHeaders(hook: RoxyHookDefinition): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(hook.headers ?? {})) {
+    headers[key] = renderHookPluginVariables(hook, value, `hook ${hook.id} header ${key}`);
+  }
+  return headers;
+}
+
+function assertPluginHookCommandAllowed(hook: RoxyHookDefinition, command: string): void {
+  if (!hook.pluginSandbox || !isAbsolute(command)) return;
+  const validation = createPluginSandboxGuard(hook.pluginSandbox).validatePath(command);
+  if (!validation.allowed) {
+    throw new Error(`Plugin hook ${hook.id} command executable is outside its sandbox: ${command}`);
+  }
+}
+
+function assertPluginHookNetworkAllowed(hook: RoxyHookDefinition, url: string): void {
+  if (!hook.pluginSandbox) return;
+  const validation = createPluginSandboxGuard(hook.pluginSandbox).validateNetworkAccess(url);
+  if (!validation.allowed) {
+    throw new Error(`Plugin hook ${hook.id} network access denied: ${validation.reason ?? url}`);
+  }
+}
+
+function getPluginHookEnv(hook: RoxyHookDefinition): NodeJS.ProcessEnv | undefined {
+  const sandbox = hook.pluginSandbox;
+  if (!sandbox) return undefined;
+  return {
+    ...process.env,
+    ROXY_PLUGIN_ID: sandbox.pluginId,
+    ROXY_PLUGIN_ROOT: sandbox.pluginRoot,
+  };
+}
+
 function renderTemplate(template: string, payload: HookRunPayload): string {
   const data = JSON.stringify(sanitizePayload(payload), null, 2);
   return template
@@ -435,10 +485,10 @@ function sanitizeRecord(record: Record<string, unknown> | undefined): Record<str
   return out;
 }
 
-function runProcess(command: string, args: string[], cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean; durationMs: number }> {
+function runProcess(command: string, args: string[], cwd: string, timeoutMs: number, signal?: AbortSignal, env?: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean; durationMs: number }> {
   return new Promise((resolve, reject) => {
     const started = Date.now();
-    const child = spawn(command, args, { cwd, shell: false, windowsHide: true, env: process.env });
+    const child = spawn(command, args, { cwd, shell: false, windowsHide: true, env: env ?? process.env });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
