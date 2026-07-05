@@ -1,6 +1,21 @@
 import type { MCPServerConfig } from '../core/types/config.js';
 import type { RoxyHookDefinition } from '../hooks/types.js';
 
+export interface PluginSandboxConfig {
+  allowedPaths?: string[];
+  allowNetworkAccess?: boolean;
+  allowedHosts?: string[];
+}
+
+export interface PluginSandboxMetadata {
+  pluginId: string;
+  pluginRoot: string;
+  manifestPath: string;
+  allowedPaths: string[];
+  allowNetworkAccess: boolean;
+  allowedHosts: string[];
+}
+
 export interface RoxyPluginCommand {
   name: string;
   description: string;
@@ -9,6 +24,9 @@ export interface RoxyPluginCommand {
   category?: 'basic' | 'dev' | 'workflow' | 'context' | 'character' | 'debug' | 'system';
   usage?: string;
   examples?: string[];
+  pluginId?: string;
+  pluginRoot?: string;
+  pluginSandbox?: PluginSandboxMetadata;
 }
 
 export interface RoxyPluginManifest {
@@ -23,6 +41,7 @@ export interface RoxyPluginManifest {
   mcpServers?: Record<string, MCPServerConfig>;
   workflows?: string[];
   characters?: string[];
+  sandbox?: PluginSandboxConfig;
 }
 
 export interface LoadedRoxyPlugin {
@@ -34,6 +53,7 @@ export interface LoadedRoxyPlugin {
   root: string;
   manifestPath: string;
   manifest: RoxyPluginManifest;
+  sandbox: PluginSandboxMetadata;
 }
 
 export interface PluginLoadError {
@@ -51,5 +71,9 @@ export interface PluginLoadResult {
 export interface PluginContributions {
   commands: RoxyPluginCommand[];
   hooks: RoxyHookDefinition[];
-  mcpServers: Record<string, MCPServerConfig>;
+  mcpServers: Record<string, MCPServerConfig & {
+    pluginId?: string;
+    pluginRoot?: string;
+    pluginSandbox?: PluginSandboxMetadata;
+  }>;
 }

@@ -1,4 +1,5 @@
 import type { CharacterBehavior, CharacterId, ExplanationStyle, PreferredAgentMode, ReviewFocus, RiskPreference } from '../aesthetic/character/types.js';
+import type { PluginSandboxMetadata } from '../plugin/types.js';
 
 export type RoxyHookEvent =
   | 'session_start'
@@ -41,6 +42,8 @@ export interface RoxyHookDefinition {
   responseRules?: string[];
   source?: string;
   pluginId?: string;
+  pluginRoot?: string;
+  pluginSandbox?: PluginSandboxMetadata;
 }
 
 export interface HookRunPayload {

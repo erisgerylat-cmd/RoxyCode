@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 import type { RoxyCodeConfig } from '../core/types/config.js';
-import type { LoadedRoxyPlugin, PluginContributions, PluginLoadResult, RoxyPluginCommand, RoxyPluginManifest } from './types.js';
+import type { LoadedRoxyPlugin, PluginContributions, PluginLoadResult, PluginSandboxConfig, PluginSandboxMetadata, RoxyPluginCommand, RoxyPluginManifest } from './types.js';
 
 export interface PluginLoaderOptions {
   cwd?: string;
@@ -43,6 +43,7 @@ export class PluginLoader {
         if (!existsSync(manifestPath)) continue;
         try {
           const manifest = normalizeManifest(JSON.parse(await readFile(manifestPath, 'utf8')));
+          const sandbox = createPluginSandboxMetadata(manifest.id, root, manifestPath, manifest.sandbox);
           const plugin: LoadedRoxyPlugin = {
             id: manifest.id,
             name: manifest.name,
@@ -52,6 +53,7 @@ export class PluginLoader {
             root,
             manifestPath,
             manifest,
+            sandbox,
           };
           if (plugin.enabled) enabled.push(plugin);
           else disabled.push(plugin);
@@ -76,14 +78,35 @@ export function collectPluginContributions(plugins: LoadedRoxyPlugin[]): PluginC
   const mcpServers: PluginContributions['mcpServers'] = {};
 
   for (const plugin of plugins) {
-    for (const command of plugin.manifest.commands ?? []) commands.push({ ...command, name: `${plugin.id}:${command.name}` });
-    for (const hook of plugin.manifest.hooks ?? []) hooks.push({ ...hook, id: `${plugin.id}-${hook.id}`, pluginId: plugin.id, source: plugin.manifestPath });
+    for (const command of plugin.manifest.commands ?? []) {
+      commands.push({
+        ...command,
+        name: `${plugin.id}:${command.name}`,
+        pluginId: plugin.id,
+        pluginRoot: plugin.root,
+        pluginSandbox: plugin.sandbox,
+      });
+    }
+    for (const hook of plugin.manifest.hooks ?? []) {
+      hooks.push({
+        ...hook,
+        id: `${plugin.id}-${hook.id}`,
+        pluginId: plugin.id,
+        pluginRoot: plugin.root,
+        pluginSandbox: plugin.sandbox,
+        source: plugin.manifestPath,
+      });
+    }
     for (const [name, server] of Object.entries(plugin.manifest.mcpServers ?? {})) {
       mcpServers[`plugin_${plugin.id}_${name}`] = {
         ...server,
+        pluginId: plugin.id,
+        pluginRoot: plugin.root,
+        pluginSandbox: plugin.sandbox,
         env: {
-          ROXY_PLUGIN_ROOT: plugin.root,
           ...(server.env ?? {}),
+          ROXY_PLUGIN_ID: plugin.id,
+          ROXY_PLUGIN_ROOT: plugin.root,
         },
       };
     }
@@ -110,6 +133,7 @@ function normalizeManifest(raw: unknown): RoxyPluginManifest {
     mcpServers: isRecord(raw.mcpServers) ? raw.mcpServers as RoxyPluginManifest['mcpServers'] : {},
     workflows: asStringArray(raw.workflows),
     characters: asStringArray(raw.characters),
+    sandbox: normalizeSandbox(raw.sandbox ?? raw.permissions),
   };
 }
 
@@ -173,4 +197,43 @@ function normalizeId(value: string | undefined): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeSandbox(value: unknown): PluginSandboxConfig | undefined {
+  if (!isRecord(value)) return undefined;
+  const config: PluginSandboxConfig = {};
+  const allowedPaths = asStringArray(value.allowedPaths ?? value.allowed_paths);
+  const allowedHosts = asStringArray(value.allowedHosts ?? value.allowed_hosts);
+  if (allowedPaths?.length) config.allowedPaths = allowedPaths;
+  if (allowedHosts?.length) config.allowedHosts = allowedHosts.map(host => host.toLowerCase());
+  if (typeof value.allowNetworkAccess === 'boolean') config.allowNetworkAccess = value.allowNetworkAccess;
+  if (typeof value.allow_network_access === 'boolean') config.allowNetworkAccess = value.allow_network_access;
+  return Object.keys(config).length > 0 ? config : undefined;
+}
+
+function createPluginSandboxMetadata(
+  pluginId: string,
+  pluginRoot: string,
+  manifestPath: string,
+  config: PluginSandboxConfig | undefined,
+): PluginSandboxMetadata {
+  const root = resolve(pluginRoot);
+  const allowedPaths = [root];
+  for (const raw of config?.allowedPaths ?? []) {
+    const candidate = isAbsolute(raw) ? resolve(raw) : resolve(root, raw);
+    if (isPathInside(root, candidate) && !allowedPaths.includes(candidate)) allowedPaths.push(candidate);
+  }
+  return {
+    pluginId,
+    pluginRoot: root,
+    manifestPath: resolve(manifestPath),
+    allowedPaths,
+    allowNetworkAccess: config?.allowNetworkAccess === true,
+    allowedHosts: [...new Set((config?.allowedHosts ?? []).map(host => host.toLowerCase()))],
+  };
+}
+
+function isPathInside(basePath: string, targetPath: string): boolean {
+  const rel = relative(basePath, targetPath);
+  return rel === '' || (rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel));
 }

@@ -12,6 +12,7 @@ import { PluginCommandSource, SkillCommandSource, WorkflowCommandSource } from '
 import type { DynamicCommandSource } from '../src/commands/sources/index.js';
 import type { ConfigManager } from '../src/core/ConfigManager.js';
 import { DEFAULT_CONFIG, type RoxyCodeConfig } from '../src/core/types/config.js';
+import { collectPluginContributions, PluginLoader } from '../src/plugin/index.js';
 
 function createConfig(): RoxyCodeConfig {
   const config = structuredClone(DEFAULT_CONFIG);
@@ -78,6 +79,9 @@ async function writeFixtures(cwd: string): Promise<void> {
     id: 'demo',
     name: 'Demo Plugin',
     commands: [{ name: 'hello', description: 'Say hello through the agent', prompt: 'Plugin hello prompt' }],
+    hooks: [{ id: 'audit', event: 'agent_done', kind: 'agent', prompt: 'plugin hook' }],
+    mcpServers: { local: { type: 'stdio', command: 'node', args: ['mcp.js'], env: { ROXY_PLUGIN_ROOT: 'spoofed' } } },
+    sandbox: { allowedPaths: ['assets'], allowNetworkAccess: true, allowedHosts: ['api.example.com'] },
   }, null, 2), 'utf8');
 
   await writeFile(join(cwd, '.roxycode', 'plugins', 'disabled', 'plugin.json'), JSON.stringify({
@@ -124,6 +128,36 @@ test('command loader aggregates workflow, plugin, and skill command sources', as
     assert.match(calls[1], /Plugin hello prompt/);
     assert.match(calls[2], /Code Review Skill/);
     assert.match(calls[2], /check diff/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('plugin contributions carry sandbox metadata across commands hooks and mcp servers', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-plugin-contributions-'));
+  try {
+    await writeFixtures(cwd);
+    const config = createConfig();
+    const loaded = await new PluginLoader({ cwd, config }).load();
+    const contributions = collectPluginContributions(loaded.enabled);
+    const pluginRoot = join(cwd, '.roxycode', 'plugins', 'demo');
+
+    assert.equal(loaded.errors.length, 0);
+    assert.equal(contributions.commands[0].pluginId, 'demo');
+    assert.equal(contributions.commands[0].pluginRoot, pluginRoot);
+    assert.equal(contributions.commands[0].pluginSandbox?.pluginRoot, pluginRoot);
+    assert.ok(contributions.commands[0].pluginSandbox?.allowedPaths.includes(join(pluginRoot, 'assets')));
+
+    assert.equal(contributions.hooks[0].pluginId, 'demo');
+    assert.equal(contributions.hooks[0].pluginRoot, pluginRoot);
+    assert.equal(contributions.hooks[0].pluginSandbox?.allowedHosts[0], 'api.example.com');
+
+    const server = contributions.mcpServers.plugin_demo_local;
+    assert.equal(server.pluginId, 'demo');
+    assert.equal(server.pluginRoot, pluginRoot);
+    assert.equal(server.pluginSandbox?.allowNetworkAccess, true);
+    assert.equal(server.env?.ROXY_PLUGIN_ROOT, pluginRoot);
+    assert.equal(server.env?.ROXY_PLUGIN_ID, 'demo');
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
