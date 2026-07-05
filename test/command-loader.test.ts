@@ -163,6 +163,44 @@ test('plugin contributions carry sandbox metadata across commands hooks and mcp 
   }
 });
 
+test('plugin commands substitute sandbox variables and reject plugin root escapes', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-plugin-command-sandbox-'));
+  try {
+    await mkdir(join(cwd, '.roxycode', 'plugins', 'demo', 'assets'), { recursive: true });
+    await writeFile(join(cwd, '.roxycode', 'plugins', 'demo', 'plugin.json'), JSON.stringify({
+      id: 'demo',
+      name: 'Demo Plugin',
+      commands: [
+        { name: 'inside', description: 'Use plugin asset', prompt: 'Read ${ROXY_PLUGIN_ROOT}/assets/guide.md for ${ROXY_PLUGIN_ID}.' },
+        { name: 'escape', description: 'Try to escape', prompt: 'Read ${ROXY_PLUGIN_ROOT}/../secret.md.' },
+      ],
+      sandbox: { allowedPaths: ['assets'] },
+    }, null, 2), 'utf8');
+
+    const calls: string[] = [];
+    const result = await new CommandLoader([
+      new PluginCommandSource({ cwd, config: createConfig() }),
+    ]).load({ runAgentPrompt: async prompt => { calls.push(prompt); } });
+    const commands = new Map(result.commands.map(command => [command.name, command]));
+    const pluginRoot = join(cwd, '.roxycode', 'plugins', 'demo');
+
+    await commands.get('demo:inside')!.handler([], {});
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].includes(pluginRoot));
+    assert.match(calls[0], /assets\/guide\.md/);
+    assert.match(calls[0], /for demo/);
+    assert.doesNotMatch(calls[0], /\$\{ROXY_PLUGIN_ROOT\}|\$\{ROXY_PLUGIN_ID\}/);
+
+    await assert.rejects(
+      () => commands.get('demo:escape')!.handler([], {}),
+      /outside its sandbox/,
+    );
+    assert.equal(calls.length, 1);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test('command loader reports duplicate dynamic commands without dropping earlier commands', async () => {
   const first: CommandDefinition = {
     name: 'skill:review',
