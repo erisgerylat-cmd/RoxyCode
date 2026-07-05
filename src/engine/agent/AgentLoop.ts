@@ -17,6 +17,8 @@ import { QueryProfiler, type QueryProfileSummary } from '../../runtime/index.js'
 import { StreamingToolExecutor } from './StreamingToolExecutor.js';
 import { createFileReadState } from '../../tool/security/FileReadState.js';
 import { loadCharacterPromptContext } from '../../aesthetic/character/CharacterPromptLoader.js';
+import { ProfileManager } from '../../session/profile/ProfileManager.js';
+import type { UserProfile } from '../../profile/types.js';
 
 const ZERO_USAGE: LLMUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
@@ -51,6 +53,8 @@ export class AgentLoop {
       }
 
       profiler.mark('query_context_loading_start');
+      const profileManager = new ProfileManager(this.options.cwd);
+      const userProfile = await profileManager.load();
       const baseRuntimeContext = renderRuntimeContext(await loadRuntimeContext(this.options.cwd, {
         query: userInput,
         workflows: this.options.config.workflows,
@@ -78,7 +82,7 @@ export class AgentLoop {
 
       const hookContext = [...(agentStartHook?.additionalContexts ?? []), ...(beforePromptHook?.additionalContexts ?? [])].filter(Boolean).join('\n\n');
       profiler.mark('query_setup_start');
-      let messages = this.buildInitialMessages(input.history, userInput, input.mode, runtimeContext, hookContext || null);
+      let messages = this.buildInitialMessages(input.history, userInput, input.mode, runtimeContext, hookContext || null, userProfile);
       profiler.mark('query_setup_end');
       let totalUsage = { ...ZERO_USAGE };
 
@@ -117,6 +121,7 @@ export class AgentLoop {
               language: this.options.language,
               cwd: this.options.cwd,
               runtimeContext,
+              profile: userProfile,
             })),
             userMessage(buildPlanPrompt(userInput, this.options.language)),
           ],
@@ -195,10 +200,10 @@ export class AgentLoop {
       }
 
       profiler.mark('query_end');
-      const profile = profiler.snapshot();
-      this.options.telemetry?.log({ name: 'query.profile', category: 'agent', durationMs: profile.totalMs, success: true, attributes: profileTelemetryAttributes(profile) }).catch(() => undefined);
+      const queryProfile = profiler.snapshot();
+      this.options.telemetry?.log({ name: 'query.profile', category: 'agent', durationMs: queryProfile.totalMs, success: true, attributes: profileTelemetryAttributes(queryProfile) }).catch(() => undefined);
       yield { type: 'usage', usage: totalUsage };
-      yield { type: 'done', messages, usage: totalUsage, profile };
+      yield { type: 'done', messages, usage: totalUsage, profile: queryProfile };
     } catch (error) {
       profiler.mark('query_error');
       const profile = profiler.snapshot();
@@ -208,7 +213,14 @@ export class AgentLoop {
     }
   }
 
-  private buildInitialMessages(history: Message[], userInput: string, mode: AgentRunInput['mode'], runtimeContext: string | null, hookContext: string | null = null): Message[] {
+  private buildInitialMessages(
+    history: Message[],
+    userInput: string,
+    mode: AgentRunInput['mode'],
+    runtimeContext: string | null,
+    hookContext: string | null = null,
+    userProfile: UserProfile | null = null,
+  ): Message[] {
     return [
       systemMessage(buildAgentSystemPrompt({
         mode,
@@ -216,6 +228,7 @@ export class AgentLoop {
         language: this.options.language,
         cwd: this.options.cwd,
         runtimeContext: joinContext(runtimeContext, hookContext),
+        profile: userProfile,
       })),
       ...history,
       userMessage(userInput),
@@ -492,7 +505,6 @@ function profileTelemetryAttributes(profile: QueryProfileSummary): Record<string
     slowestPhaseMs: profile.slowestPhase?.durationMs,
   };
 }
-
 
 
 

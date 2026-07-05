@@ -10,8 +10,9 @@ RoxyCode 的目标不是做 Claude Code 的简单中文外壳，而是把 Claude
 
 已验证：
 
+- `pnpm exec tsc --noEmit --pretty false`
 - `pnpm run build`
-- `pnpm test`：129 passed，2 skipped，0 failed
+- `pnpm test`：130 passed，2 skipped，0 failed
 
 ## 与 Claude Code 的对照
 
@@ -288,4 +289,3 @@ src/
 - 文件修改必须经过工具权限和备份策略。
 - 角色、审美、prompt 扩展不能覆盖安全规则。
 - 新能力优先补测试，再更新文档。
-

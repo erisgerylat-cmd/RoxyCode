@@ -11,6 +11,7 @@ import {
 } from './CharacterMarketplaceSchema.js';
 
 export type CharacterMarketplaceIssueSeverity = 'error' | 'warning';
+type CharacterMarketplaceRemoteSource = Extract<CharacterMarketplaceSource, { type: 'url' }>;
 
 export interface CharacterMarketplaceIssue {
   severity: CharacterMarketplaceIssueSeverity;
@@ -177,17 +178,23 @@ function buildInstallHint(entry: CharacterMarketplaceEntry, marketplaceDir: stri
   const source = entry.source;
   if (typeof source === 'string') return `/character install ${safeResolve(marketplaceDir, source) ?? source}`;
   if (source.type === 'file' || source.type === 'directory') return `/character install ${safeResolve(marketplaceDir, source.path) ?? source.path}`;
-  return `下载 ${source.url} 后执行 /character verify <file> --sha256 ${source.sha256 ?? '<sha256>'}`;
+  if (isRemoteSource(source)) return `下载 ${source.url} 后执行 /character verify <file> --sha256 ${source.sha256 ?? '<sha256>'}`;
+  return '/character marketplace validate <marketplace.json>';
 }
 
 function describeSource(source: CharacterMarketplaceSource): string {
   if (typeof source === 'string') return source;
   if (source.type === 'file' || source.type === 'directory') return `${source.type}:${source.path}`;
-  return `url:${source.url}`;
+  if (isRemoteSource(source)) return `url:${source.url}`;
+  return 'unknown';
 }
 
 function sourceSha(source: CharacterMarketplaceSource): string | undefined {
-  return typeof source === 'object' && source.type === 'url' ? source.sha256 : undefined;
+  return isRemoteSource(source) ? source.sha256 : undefined;
+}
+
+function isRemoteSource(source: CharacterMarketplaceSource): source is CharacterMarketplaceRemoteSource {
+  return typeof source === 'object' && source !== null && source.type === 'url';
 }
 
 function safeResolve(baseDir: string, packagePath: string): string | undefined {

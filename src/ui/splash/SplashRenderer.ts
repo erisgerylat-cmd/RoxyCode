@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import type { Character } from '../../aesthetic/character/types.js';
 import { DEFAULT_LANGUAGE, t, type Language } from '../../i18n/index.js';
+import { renderSprite } from '../renderers/SpriteRenderer.js';
 
 /**
  * RoxyCode 启动欢迎画面
@@ -111,6 +112,7 @@ export interface SplashOptions {
   character?: Character;
   startupQuote?: string;
   language?: Language;
+  aestheticMode?: 'minimal' | 'balanced' | 'immersive';
 }
 
 export function renderSplash(options: SplashOptions = {}): string {
@@ -122,6 +124,7 @@ export function renderSplash(options: SplashOptions = {}): string {
     character,
     startupQuote,
     language = DEFAULT_LANGUAGE,
+    aestheticMode = 'balanced',
   } = options;
 
   const theme = buildTheme(character);
@@ -196,6 +199,21 @@ export function renderSplash(options: SplashOptions = {}): string {
     lines.push('');
     lines.push(theme.dim('  "') + theme.highlight(startupQuote) + theme.dim('"'));
     lines.push(theme.dim(`  —— ${character.name} · ${character.title}`));
+  }
+
+  // ── Pixel / ASCII 小伙伴 ──
+  if (character?.companion) {
+    const sprite = renderSprite({
+      companion: character.companion,
+      theme: character.theme,
+      state: 'idle',
+      showLine: aestheticMode === 'immersive',
+      aestheticMode,
+    });
+    if (sprite) {
+      lines.push('');
+      lines.push(sprite);
+    }
   }
 
   return lines.join('\n');

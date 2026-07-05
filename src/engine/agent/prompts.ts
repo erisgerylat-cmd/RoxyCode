@@ -1,4 +1,6 @@
 import type { Character } from '../../aesthetic/character/types.js';
+import type { UserProfile } from '../../profile/types.js';
+import { getProfileSystemPromptInjection } from '../../profile/ProfileContext.js';
 import type { AgentLoopMode } from './types.js';
 
 export interface SystemPromptInput {
@@ -7,6 +9,7 @@ export interface SystemPromptInput {
   language: 'zh-CN' | 'en-US';
   cwd: string;
   runtimeContext?: string | null;
+  profile?: UserProfile | null;
 }
 
 export function buildAgentSystemPrompt(input: SystemPromptInput): string {
@@ -34,7 +37,15 @@ export function buildAgentSystemPrompt(input: SystemPromptInput): string {
         modeGuide,
       ];
 
-  base.push(renderCharacterBehaviorPrompt(input.character, input.language));
+  // Adjust character behavior based on aesthetic mode
+  const aestheticMode = input.profile?.aestheticMode ?? 'balanced';
+  base.push(renderCharacterBehaviorPrompt(input.character, input.language, aestheticMode));
+
+  // Inject profile system prompt if available
+  if (input.profile) {
+    base.push(getProfileSystemPromptInjection(input.profile, input.language));
+  }
+
   if (input.runtimeContext) base.push(input.runtimeContext);
   return base.join('\n');
 }
@@ -79,7 +90,25 @@ function enModeGuide(mode: AgentLoopMode): string {
   }
 }
 
-function renderCharacterBehaviorPrompt(character: Character, language: 'zh-CN' | 'en-US'): string {
+function buildAestheticInstruction(mode: string, language: 'zh-CN' | 'en-US'): string {
+  const isZh = language !== 'en-US';
+  switch (mode) {
+    case 'minimal':
+      return isZh
+        ? '当前审美模式：极简。请保持工程化、中立的表达风格，减少角色化语气、感叹词和世界观台词，专注技术内容。'
+        : 'Aesthetic mode: minimal. Use an engineering-neutral tone. Minimize character-flavored expressions, exclamations, and lore phrases. Focus strictly on technical content.';
+    case 'immersive':
+      return isZh
+        ? '当前审美模式：沉浸。可以适度使用角色特有的语气词、世界观类比和成功/失败台词，营造沉浸式体验，但不能让风格影响事实准确性。'
+        : 'Aesthetic mode: immersive. You may use character-specific phrases, lore analogies, and completion/failure lines moderately to create an immersive experience, without compromising factual accuracy.';
+    default: // balanced
+      return isZh
+        ? '当前审美模式：平衡。保持角色风格，但不要频繁使用角色台词或打断工作流程。'
+        : 'Aesthetic mode: balanced. Maintain character style but avoid frequent character dialogues or workflow interruptions.';
+  }
+}
+
+function renderCharacterBehaviorPrompt(character: Character, language: 'zh-CN' | 'en-US', aestheticMode = 'balanced'): string {
   const behavior = character.behavior;
   const companion = character.companion;
   if (language === 'en-US') {
@@ -87,6 +116,7 @@ function renderCharacterBehaviorPrompt(character: Character, language: 'zh-CN' |
       '## Character Behavior Profile',
       character.systemPromptPersona,
       'Character style may influence explanation, review focus, risk preference, and workflow suggestions, but it must never weaken tool permissions, safety checks, or factual verification.',
+      buildAestheticInstruction(aestheticMode, language),
     ];
     if (behavior) {
       lines.push(`- explanationStyle: ${behavior.explanationStyle}`);
@@ -106,6 +136,7 @@ function renderCharacterBehaviorPrompt(character: Character, language: 'zh-CN' |
     '## \u89d2\u8272\u884c\u4e3a\u6863\u6848',
     character.systemPromptPersona,
     '\u89d2\u8272\u53ef\u4ee5\u5f71\u54cd\u89e3\u91ca\u98ce\u683c\u3001\u5ba1\u67e5\u91cd\u70b9\u3001\u98ce\u9669\u504f\u597d\u548c\u5de5\u4f5c\u6d41\u5efa\u8bae\uff0c\u4f46\u4e0d\u80fd\u5f31\u5316\u5de5\u5177\u6743\u9650\u3001\u5b89\u5168\u68c0\u67e5\u6216\u4e8b\u5b9e\u9a8c\u8bc1\u3002',
+    buildAestheticInstruction(aestheticMode, language),
   ];
   if (behavior) {
     lines.push(`- \u89e3\u91ca\u98ce\u683c: ${behavior.explanationStyle}`);
