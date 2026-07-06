@@ -126,6 +126,17 @@ export type {
   CharacterMarketplaceEntry,
   CharacterMarketplaceSource,
 } from './marketplace/CharacterMarketplaceSchema.js';
+export { StoreClient } from './marketplace/StoreClient.js';
+export type {
+  StoreClientOptions,
+  StoreSearchFilters,
+  StorePackageSummary,
+  StorePackageVersion,
+  StorePackageDetail,
+  StoreDownloadTicket,
+  StoreDownloadResult,
+  StoreRiskLevel,
+} from './marketplace/StoreClient.js';
 export type {
   Character,
   CharacterId,

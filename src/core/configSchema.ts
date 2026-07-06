@@ -71,6 +71,8 @@ const CONFIG_RULES: Record<string, FieldRule> = {
   'plugins.enabled': { type: 'boolean' },
   'plugins.directories': { type: 'array' },
   'plugins.trust': { type: 'string', enumValues: ['project-only', 'allow-local'] },
+  'store.baseUrl': { type: 'string', optional: true },
+  'store.token': { type: 'string', optional: true },
 };
 
 const REQUIRED_OBJECT_PATHS = [
@@ -91,6 +93,7 @@ const REQUIRED_OBJECT_PATHS = [
   'context',
   'hooks',
   'plugins',
+  'store',
 ];
 
 const KNOWN_TOP_LEVEL_KEYS = new Set(Object.keys(DEFAULT_CONFIG));

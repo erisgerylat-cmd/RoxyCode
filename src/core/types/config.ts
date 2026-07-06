@@ -103,6 +103,10 @@ export interface RoxyCodeConfig {
     directories: string[];
     trust: 'project-only' | 'allow-local';
   };
+  store: {
+    baseUrl?: string;
+    token?: string;
+  };
 }
 
 export const DEFAULT_CONFIG: RoxyCodeConfig = {
@@ -179,4 +183,5 @@ export const DEFAULT_CONFIG: RoxyCodeConfig = {
     directories: ['.roxycode/plugins'],
     trust: 'project-only',
   },
+  store: {},
 };
