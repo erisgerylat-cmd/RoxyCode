@@ -1,13 +1,14 @@
 ﻿import chalk from 'chalk';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import type { CharacterManager } from '../../aesthetic/character/CharacterManager.js';
 import type { Character } from '../../aesthetic/character/types.js';
 import type { ConfigManager } from '../../core/ConfigManager.js';
 import type { ContextManager } from '../../session/context/ContextManager.js';
 import type { LLMProvider } from '../../core/types/llm.js';
 import { userMessage, type Message } from '../../core/types/message.js';
-import { AgentLoop, normalizeAgentMode, type AgentLoopEvent } from '../../engine/agent/index.js';
+import { AgentLoop, normalizeAgentMode, type AgentLoopEvent, type AgentLoopMode } from '../../engine/agent/index.js';
 import { createDefaultToolRuntime, getBuiltinTools, type ToolExecutor, type ToolRegistry, type ToolPermissionPrompt } from '../../tool/index.js';
 import { TodoStore } from '../../tool/builtin/todoWrite.js';
 import { CommandRegistry, getCategoryMeta, type CommandCategory, type SubcommandDefinition } from '../../commands/CommandRegistry.js';
@@ -49,6 +50,11 @@ export interface REPLOptions {
 
 interface LineSubmitOptions { fromPalette?: boolean }
 interface PaletteSelectionOptions { lineAlreadySubmitted?: boolean }
+interface AgentRunResult {
+  planningText: string;
+  assistantText: string;
+  messages: Message[];
+}
 
 export class REPL {
   private readonly characterManager: CharacterManager;
@@ -207,6 +213,7 @@ export class REPL {
       compactSession: () => this.compactSession(),
       getSessionInfo: () => ({ sessionId: this.sessionStore.sessionId, path: this.sessionStore.path }),
       runAgentPrompt: prompt => this.submitAgentPrompt(prompt),
+      runPlanPrompt: prompt => this.submitPlanPrompt(prompt),
     });
     this.commandRegistry.registerMany(commands);
   }
@@ -613,11 +620,43 @@ export class REPL {
     await this.sessionStore.appendMessage(userMessage(input), 'user');
     await this.runAgentInput(input);
   }
-  private async runAgentInput(input: string): Promise<void> {
+
+  private async submitPlanPrompt(input: string): Promise<void> {
+    const zh = this.getLanguage() === 'zh-CN';
+    await this.sessionStore.appendMessage(userMessage(`${zh ? '[\u8ba1\u5212\u8bf7\u6c42]' : '[Plan request]'}\n${input}`), 'user');
+    const result = await this.runAgentInput(input, { modeOverride: 'plan' });
+    const planText = (result.assistantText || result.planningText).trim();
+    if (!planText) {
+      console.log(chalk.yellow(zh ? '  \u6ca1\u6709\u751f\u6210\u53ef\u6279\u51c6\u7684\u8ba1\u5212\u3002' : '  No approvable plan was generated.'));
+      return;
+    }
+
+    const approved = await this.confirmPlanExecution(planText);
+    if (!approved) {
+      console.log(chalk.dim(zh ? '  \u5df2\u4fdd\u7559\u8ba1\u5212\uff0c\u6ca1\u6709\u6267\u884c\u5199\u5165\u64cd\u4f5c\u3002' : '  Plan kept in the session; no implementation was started.'));
+      return;
+    }
+
+    const executionPrompt = [
+      zh ? '\u7528\u6237\u5df2\u6279\u51c6\u4e0b\u9762\u7684 /plan \u8ba1\u5212\u3002\u8bf7\u6309\u8ba1\u5212\u6267\u884c\uff0c\u5fc5\u8981\u65f6\u4f7f\u7528 todo_write \u8ddf\u8e2a\u8fdb\u5ea6\u3002' : 'The user approved the following /plan result. Implement it now, using todo_write when the task has multiple steps.',
+      '',
+      zh ? '\u539f\u59cb\u4efb\u52a1:' : 'Original task:',
+      input,
+      '',
+      zh ? '\u5df2\u6279\u51c6\u8ba1\u5212:' : 'Approved plan:',
+      planText,
+    ].join('\n');
+    await this.submitAgentPrompt(executionPrompt);
+  }
+
+  private async runAgentInput(input: string, options: { modeOverride?: AgentLoopMode } = {}): Promise<AgentRunResult> {
     this.processing = true;
     this.agentLoop = this.createAgentLoop();
-    const mode = normalizeAgentMode(this.configManager.get('mode') as string | undefined);
+    const mode = options.modeOverride ?? normalizeAgentMode(this.configManager.get('mode') as string | undefined);
     const beforeCount = this.agentMessages.length;
+    const planningTexts: string[] = [];
+    const assistantTexts: string[] = [];
+    let finalMessages: Message[] = this.agentMessages;
     this.runtimeState.recordAgentStart({ mode, userInput: input });
     this.toolActivityRenderer.resetTurn();
     this.toolActivityRenderer.updateCharacter(this.characterManager.getCurrentCharacter());
@@ -633,11 +672,14 @@ export class REPL {
         void this.recordAgentTelemetry(event);
         await this.recordSessionAgentEvent(event).catch(() => undefined);
         this.renderAgentEvent(event);
+        if (event.type === 'planning') planningTexts.push(event.text);
+        if (event.type === 'assistant_message') assistantTexts.push(event.text);
         if (event.type === 'done') {
           const nextMessages = event.messages.filter(message => message.role !== 'system');
           const additions = nextMessages.slice(Math.min(nextMessages.length, beforeCount + 1));
           for (const message of additions) await this.sessionStore.appendMessage(message);
           this.agentMessages = nextMessages;
+          finalMessages = nextMessages;
           this.runtimeState.updateSession({ messageCount: this.agentMessages.length, turns: this.conversationTurns });
           void this.extractAutoMemories(nextMessages).catch(() => undefined);
         }
@@ -649,6 +691,34 @@ export class REPL {
     } finally {
       if (this.statusBar.isActive()) this.statusBar.clear();
       this.processing = false;
+    }
+    return { planningText: planningTexts.join('\n\n'), assistantText: assistantTexts.join('\n\n'), messages: finalMessages };
+  }
+
+  private async confirmPlanExecution(planText: string): Promise<boolean> {
+    const zh = this.getLanguage() === 'zh-CN';
+    const character = this.characterManager.getCurrentCharacter();
+    if (!process.stdin.isTTY) {
+      console.log(chalk.yellow(zh
+        ? '  \u975e\u4ea4\u4e92\u7ec8\u7aef\u65e0\u6cd5\u6279\u51c6\u8ba1\u5212\uff1b\u672c\u6b21\u53ea\u751f\u6210\u8ba1\u5212\u3002'
+        : '  Non-interactive terminal cannot approve the plan; planning only.'));
+      return false;
+    }
+
+    const readerWasActive = this.reader?.isActive === true;
+    this.clearStatusBar();
+    if (readerWasActive) this.reader?.pause();
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      console.log(chalk.hex(character.theme.accent)(zh ? '\n  \u8ba1\u5212\u5df2\u751f\u6210\uff0c\u662f\u5426\u6279\u51c6\u6267\u884c\uff1f' : '\n  Plan generated. Approve implementation?'));
+      console.log(chalk.dim(zh
+        ? `  \u8f93\u5165 y \u6267\u884c\uff0cn \u4ec5\u4fdd\u7559\u8ba1\u5212\u3002\u8ba1\u5212\u957f\u5ea6\uff1a${planText.length} chars`
+        : `  Enter y to execute, n to keep the plan only. Plan length: ${planText.length} chars`));
+      const answer = (await rl.question(chalk.hex(character.theme.primary)(zh ? '  \u6279\u51c6\u6267\u884c? [y/N] ' : '  Approve implementation? [y/N] '))).trim().toLowerCase();
+      return answer === 'y' || answer === 'yes' || answer === '\u662f' || answer === '\u6279\u51c6' || answer === '\u6267\u884c';
+    } finally {
+      rl.close();
+      if (readerWasActive && !this.shutdownRequested) this.reader?.resume({ redraw: false });
     }
   }
 

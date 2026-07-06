@@ -43,7 +43,7 @@ export interface RoxyCodeConfig {
     language: 'zh-CN' | 'en-US';
     aestheticMode: AestheticMode;
   };
-  mode: 'auto' | 'lite' | 'economic' | 'standard' | 'ultimate';
+  mode: 'auto' | 'lite' | 'economic' | 'standard' | 'ultimate' | 'plan';
   questioning: {
     mode: 'always' | 'smart' | 'minimal' | 'never';
   };

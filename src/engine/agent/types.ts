@@ -4,13 +4,13 @@ import type { LLMProvider, LLMToolResultPairingRepair, LLMUsage } from '../../co
 import type { Message, ToolCall, ToolResult } from '../../core/types/message.js';
 import type { ContextManager } from '../../session/context/ContextManager.js';
 import type { HookRunner } from '../../hooks/types.js';
-import type { Tool, ToolDefinition, ToolExecutor, ToolPermissionPrompt, ToolProgressEvent } from '../../tool/index.js';
+import type { Tool, ToolDefinition, ToolExecutor, ToolPermissionMode, ToolPermissionPrompt, ToolProgressEvent } from '../../tool/index.js';
 import type { TelemetryLogger } from '../../telemetry/index.js';
 import type { MultiAgentEvent } from '../multi-agent/index.js';
 import type { QueryProfileSummary } from '../../runtime/index.js';
 import type { TodoStore } from '../../tool/builtin/todoWrite.js';
 
-export type AgentLoopMode = 'lite' | 'economic' | 'standard' | 'ultimate';
+export type AgentLoopMode = 'lite' | 'economic' | 'standard' | 'ultimate' | 'plan';
 
 export type AgentLoopEvent =
   | MultiAgentEvent
@@ -69,4 +69,5 @@ export interface AgentModeSpec {
   requiresPlan: boolean;
   requiresVerification: boolean;
   parallelAgents: number;
+  toolPermissionMode?: ToolPermissionMode;
 }

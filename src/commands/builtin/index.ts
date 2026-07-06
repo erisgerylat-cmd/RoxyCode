@@ -62,6 +62,7 @@ export interface BuiltinCommandFactoryOptions {
   compactSession?: () => Promise<void>;
   getSessionInfo?: () => { sessionId: string; path: string };
   runAgentPrompt?: (prompt: string) => Promise<void>;
+  runPlanPrompt?: (prompt: string) => Promise<void>;
 }
 
 export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): CommandDefinition[] {
@@ -275,20 +276,43 @@ export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): Co
       handler: args => handleAgentsCommand(args, options.language),
     },
     {
+      name: 'plan',
+      description: isZh ? zh('planDescription') : 'Create a read-only plan, then ask for approval before execution',
+      aliases: ['plan-mode'],
+      category: 'dev',
+      source: 'builtin',
+      type: 'local',
+      usage: '/plan <task>',
+      examples: ['/plan refactor the command registry', '/plan 修复登录页表单校验并补测试'],
+      handler: async args => {
+        const prompt = args.join(' ').trim();
+        if (!prompt) {
+          console.log(chalk.yellow(isZh ? '  用法: /plan <任务描述>' : '  Usage: /plan <task>'));
+          return;
+        }
+        if (!options.runPlanPrompt) {
+          console.log(chalk.red(isZh ? '  当前运行环境不支持 /plan。' : '  /plan is not available in this runtime.'));
+          return;
+        }
+        await options.runPlanPrompt(prompt);
+      },
+    },
+    {
       name: 'mode',
       description: isZh ? zh('modeDescription') : 'Show or switch RoxyCode Agent Loop reasoning mode',
       aliases: ['reasoning'],
       category: 'dev',
       source: 'builtin',
       type: 'local',
-      usage: '/mode [auto|lite|economic|standard|ultimate] [--project|--global]',
-      examples: ['/mode', '/mode standard', '/mode ultimate --project', '/mode auto --global'],
+      usage: '/mode [auto|lite|economic|standard|ultimate|plan] [--project|--global]',
+      examples: ['/mode', '/mode standard', '/mode ultimate --project', '/mode plan', '/mode auto --global'],
       subcommands: [
         { name: 'auto', description: isZh ? zh('modeAuto') : 'Use the default Standard mode' },
         { name: 'lite', description: isZh ? zh('modeLite') : 'Single-turn answer without proactive tools' },
         { name: 'economic', description: isZh ? zh('modeEconomic') : 'Cost-controlled ReAct tool loop' },
         { name: 'standard', description: isZh ? zh('modeStandard') : 'Plan, execute, then verify' },
         { name: 'ultimate', description: isZh ? zh('modeUltimate') : 'Coordinator plus parallel sub-agent analysis' },
+        { name: 'plan', description: isZh ? zh('modePlan') : 'Read-only planning and approval mode' },
       ],
       handler: args => handleModeCommand(args, options),
     },
@@ -576,7 +600,7 @@ async function handleModeCommand(args: string[], options: BuiltinCommandFactoryO
 
   if (!isConfigurableAgentMode(raw)) {
     console.log(chalk.red(options.language === 'zh-CN' ? `  ${zh('modeInvalid')}: ${raw}` : `  Invalid mode: ${raw}`));
-    console.log(chalk.dim('  auto, lite, economic, standard, ultimate'));
+    console.log(chalk.dim('  auto, lite, economic, standard, ultimate, plan'));
     return;
   }
 
@@ -605,6 +629,7 @@ function renderModeCommand(options: BuiltinCommandFactoryOptions): void {
     ['economic', isZh ? zh('modeEconomic') : 'Cost-controlled ReAct tool loop'],
     ['standard', isZh ? zh('modeStandard') : 'Plan, execute, then verify'],
     ['ultimate', isZh ? zh('modeUltimate') : 'Coordinator plus parallel sub-agent analysis'],
+    ['plan', isZh ? zh('modePlan') : 'Read-only planning and approval mode'],
   ] as const;
 
   console.log('');
@@ -616,7 +641,7 @@ function renderModeCommand(options: BuiltinCommandFactoryOptions): void {
     const marker = mode === current ? '*' : ' ';
     console.log(`  ${marker} ${mode.padEnd(9)} ${description}`);
   }
-  console.log(chalk.dim('  /mode [auto|lite|economic|standard|ultimate] [--project|--global]'));
+  console.log(chalk.dim('  /mode [auto|lite|economic|standard|ultimate|plan] [--project|--global]'));
   console.log('');
 }
 async function handleModelCommand(args: string[], options: BuiltinCommandFactoryOptions): Promise<void> {
@@ -1133,6 +1158,8 @@ type ZhKey =
   | 'modeEconomic'
   | 'modeStandard'
   | 'modeUltimate'
+  | 'modePlan'
+  | 'planDescription'
   | 'diagnosticsDescription'
   | 'memoryDescription'
   | 'memoryList'
@@ -1193,6 +1220,8 @@ const ZH: Record<ZhKey, string> = {
   modeEconomic: 'Economic\uff1a\u63a7\u5236\u6210\u672c\u7684 ReAct \u5de5\u5177\u5faa\u73af',
   modeStandard: 'Standard\uff1a\u8ba1\u5212 -> \u6267\u884c -> \u9a8c\u8bc1',
   modeUltimate: 'Ultimate\uff1aCoordinator \u548c\u591a Agent \u5e76\u884c\u5206\u6790',
+  modePlan: 'Plan\uff1a\u53ea\u8bfb\u89c4\u5212\uff0c\u6279\u51c6\u540e\u518d\u6267\u884c',
+  planDescription: '\u751f\u6210\u53ea\u8bfb\u8ba1\u5212\uff0c\u5e76\u5728\u6267\u884c\u524d\u8bf7\u4f60\u6279\u51c6',
   diagnosticsDescription: '\u8fd0\u884c Claude Code \u98ce\u683c\u7684 RoxyCode \u8fd0\u884c\u8bca\u65ad\u62a5\u544a',
   memoryDescription: '\u7ba1\u7406 RoxyCode \u957f\u671f\u8bb0\u5fc6',
   memoryList: '\u5217\u51fa\u8bb0\u5fc6',

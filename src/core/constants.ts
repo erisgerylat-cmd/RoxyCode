@@ -32,7 +32,7 @@ export const DEFAULT_COMPRESS_THRESHOLD = 0.8;
 // ═══════════════════════════════════════════════════════════════
 
 /** 推理模式列表 */
-export const MODES = ['lite', 'economic', 'standard', 'ultimate'] as const;
+export const MODES = ['lite', 'economic', 'standard', 'ultimate', 'plan'] as const;
 
 /** 推理模式类型 */
 export type Mode = typeof MODES[number];

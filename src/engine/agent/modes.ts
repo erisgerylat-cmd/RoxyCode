@@ -31,6 +31,17 @@ const MODE_SPECS: Record<AgentLoopMode, AgentModeSpec> = {
     requiresVerification: true,
     parallelAgents: 1,
   },
+  plan: {
+    mode: 'plan',
+    label: 'Plan',
+    description: '\u53ea\u8bfb\u89c4\u5212\uff1a\u5148\u751f\u6210\u65b9\u6848\uff0c\u53ea\u5141\u8bb8\u8bfb\u53d6/\u641c\u7d22/Todo \u7c7b\u5de5\u5177\uff0c\u7b49\u5f85\u7528\u6237\u6279\u51c6\u540e\u518d\u6267\u884c\u3002',
+    maxIterations: 4,
+    allowTools: true,
+    requiresPlan: true,
+    requiresVerification: false,
+    parallelAgents: 1,
+    toolPermissionMode: 'read-only',
+  },
   ultimate: {
     mode: 'ultimate',
     label: 'Ultimate',
@@ -48,11 +59,11 @@ export function getAgentModeSpec(mode: AgentLoopMode): AgentModeSpec {
 }
 
 export function normalizeAgentMode(mode: string | undefined): AgentLoopMode {
-  if (mode === 'lite' || mode === 'economic' || mode === 'standard' || mode === 'ultimate') return mode;
+  if (mode === 'lite' || mode === 'economic' || mode === 'standard' || mode === 'ultimate' || mode === 'plan') return mode;
   if (mode === 'auto') return 'standard';
   return 'standard';
 }
 
 export function isConfigurableAgentMode(mode: string | undefined): mode is AgentLoopMode | 'auto' {
-  return mode === 'auto' || mode === 'lite' || mode === 'economic' || mode === 'standard' || mode === 'ultimate';
+  return mode === 'auto' || mode === 'lite' || mode === 'economic' || mode === 'standard' || mode === 'ultimate' || mode === 'plan';
 }

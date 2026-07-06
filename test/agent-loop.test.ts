@@ -12,6 +12,7 @@ import { AgentLoop } from '../src/engine/agent/AgentLoop.js';
 import type { AgentLoopOptions } from '../src/engine/agent/types.js';
 import { AuditLog } from '../src/tool/audit/AuditLog.js';
 import { editFileTool } from '../src/tool/builtin/editFile.js';
+import { executeCommandTool } from '../src/tool/builtin/executeCommand.js';
 import { readFileTool } from '../src/tool/builtin/readFile.js';
 import { writeFileTool } from '../src/tool/builtin/writeFile.js';
 import { ToolExecutor as RealToolExecutor } from '../src/tool/executor/ToolExecutor.js';
@@ -329,6 +330,56 @@ test('economic agent loop executes real edit_file tool with confirmation, backup
     assert.equal(records[1].metadata.diff.addedLines, 1);
     const backupPath = records[1].metadata.backups[0].backupPath;
     assert.equal(await readFile(backupPath, 'utf8'), 'alpha\nold value\nomega\n');
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('plan mode exposes only read-only tools and blocks write execution', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-agent-plan-mode-'));
+  try {
+    await writeFile(join(cwd, 'target.txt'), 'before\n', 'utf8');
+    const toolCall: ToolCall = {
+      id: 'call-plan-shell',
+      name: 'execute_command',
+      arguments: { command: `"${process.execPath}" -e "console.log('should-not-run')"` },
+    };
+    const provider = new ScriptedProvider([
+      [
+        { type: 'text', text: 'I should not write during planning.' },
+        { type: 'tool_call_start', toolCall },
+        { type: 'done', usage: USAGE, toolCalls: [toolCall], finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text', text: 'Plan only: inspect files, then ask for approval before editing.' },
+        { type: 'done', usage: USAGE, toolCalls: [], finishReason: 'stop' },
+      ],
+    ], 'Plan: inspect first, then request approval.');
+    const registry = new ToolRegistry();
+    registry.register(readFileTool);
+    registry.register(executeCommandTool);
+    const executor = new RealToolExecutor(registry, new PermissionGuard(), new AuditLog(cwd));
+    const loop = createLoop({
+      cwd,
+      provider,
+      executor,
+      tools: registry.definitions(),
+      runtimeTools: registry.list(),
+    });
+
+    const events = [];
+    for await (const event of loop.run({ userInput: 'Plan an edit to target.txt.', history: [], mode: 'plan' })) events.push(event);
+
+    assert.equal(provider.chatCalls.length, 1);
+    assert.equal(provider.streamCalls.length, 2);
+    const exposedTools = provider.streamCalls[0].tools?.map(tool => tool.name) ?? [];
+    assert.deepEqual(exposedTools, ['read_file']);
+
+    const toolResult = events.find(event => event.type === 'tool_result');
+    assert.ok(toolResult && toolResult.type === 'tool_result');
+    assert.equal(toolResult.result.success, false);
+    assert.match(toolResult.result.output, /read-only|只读|permission/i);
+    assert.equal(await readFile(join(cwd, 'target.txt'), 'utf8'), 'before\n');
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

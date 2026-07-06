@@ -17,6 +17,7 @@ import { QueryProfiler, type QueryProfileSummary } from '../../runtime/index.js'
 import { StreamingToolExecutor } from './StreamingToolExecutor.js';
 import { createFileReadState } from '../../tool/security/FileReadState.js';
 import { TodoStore } from '../../tool/builtin/todoWrite.js';
+import type { Tool, ToolDefinition, ToolPermissionMode } from '../../tool/index.js';
 import { loadCharacterPromptContext } from '../../aesthetic/character/CharacterPromptLoader.js';
 import { ProfileManager } from '../../session/profile/ProfileManager.js';
 import type { UserProfile } from '../../profile/types.js';
@@ -138,7 +139,7 @@ export class AgentLoop {
       }
 
       if (spec.allowTools && this.options.llmProvider.supportsTools) {
-        const loopResult = yield* this.runToolLoop(messages, spec.maxIterations, input.mode, tokenBudget, budgetTracker, totalUsage, profiler, pairingRepairs, onToolResultPairingRepair);
+        const loopResult = yield* this.runToolLoop(messages, spec.maxIterations, input.mode, spec.toolPermissionMode ?? 'strict', tokenBudget, budgetTracker, totalUsage, profiler, pairingRepairs, onToolResultPairingRepair);
         messages = loopResult.messages;
         totalUsage = addUsage(totalUsage, loopResult.usage);
       } else {
@@ -295,6 +296,7 @@ export class AgentLoop {
     initialMessages: Message[],
     maxIterations: number,
     mode: AgentRunInput['mode'],
+    permissionMode: ToolPermissionMode,
     budget: number | null,
     budgetTracker: BudgetTracker,
     baseUsage: LLMUsage,
@@ -307,6 +309,8 @@ export class AgentLoop {
     let toolIterations = 0;
     const fileReadState = createFileReadState();
     const todoStore = this.options.todoStore ?? new TodoStore();
+    const runtimeTools = filterToolsForPermissionMode(this.options.toolRuntimeTools ?? [], permissionMode);
+    const toolDefinitions = filterToolDefinitionsForPermissionMode(this.options.tools, runtimeTools, permissionMode);
     const maxModelCalls = maxIterations + (budget ? 3 : 0);
 
     for (let modelCall = 0; modelCall < maxModelCalls; modelCall++) {
@@ -322,7 +326,7 @@ export class AgentLoop {
       yield { type: 'model_request_start', phase: 'tool_loop', iteration: modelCall + 1 };
       for await (const chunk of this.options.llmProvider.chatStream({
         messages: compacted,
-        tools: this.options.tools,
+        tools: toolDefinitions,
         signal: this.options.signal,
         onToolResultPairingRepair,
       })) {
@@ -392,13 +396,13 @@ export class AgentLoop {
 
       const streamingExecutor = new StreamingToolExecutor({
         toolExecutor: this.options.toolExecutor,
-        tools: this.options.toolRuntimeTools ?? [],
+        tools: runtimeTools,
         context: {
           cwd: this.options.cwd,
           sessionId: this.options.sessionId,
           config: this.options.config,
           language: this.options.language,
-          permissionMode: 'strict',
+          permissionMode,
           explain: true,
           signal: this.options.signal,
           characterId: this.options.character.id,
@@ -495,6 +499,21 @@ function extractAssistantText(messages: Message[]): string {
     .join('\n\n');
 }
 
+function filterToolsForPermissionMode(tools: Tool[], permissionMode: ToolPermissionMode): Tool[] {
+  if (permissionMode !== 'read-only') return tools;
+  return tools.filter(tool => tool.isReadOnly);
+}
+
+function filterToolDefinitionsForPermissionMode(
+  definitions: ToolDefinition[],
+  runtimeTools: Tool[],
+  permissionMode: ToolPermissionMode,
+): ToolDefinition[] {
+  if (permissionMode !== 'read-only') return definitions;
+  const allowed = new Set(runtimeTools.map(tool => tool.definition.name));
+  return definitions.filter(definition => allowed.has(definition.name));
+}
+
 function profileTelemetryAttributes(profile: QueryProfileSummary): Record<string, unknown> {
   return {
     profileId: profile.id,
@@ -508,5 +527,3 @@ function profileTelemetryAttributes(profile: QueryProfileSummary): Record<string
     slowestPhaseMs: profile.slowestPhase?.durationMs,
   };
 }
-
-

@@ -41,7 +41,7 @@ const CONFIG_RULES: Record<string, FieldRule> = {
   'llm.baseUrl': { type: 'string', optional: true },
   'ui.language': { type: 'string', enumValues: ['zh-CN', 'en-US'] },
   'ui.aestheticMode': { type: 'string', enumValues: ['minimal', 'balanced', 'immersive'] },
-  mode: { type: 'string', enumValues: ['auto', 'lite', 'economic', 'standard', 'ultimate'] },
+  mode: { type: 'string', enumValues: ['auto', 'lite', 'economic', 'standard', 'ultimate', 'plan'] },
   'questioning.mode': { type: 'string', enumValues: ['always', 'smart', 'minimal', 'never'] },
   'cost.pricingMethod': { type: 'string', enumValues: ['token', 'plan', 'none'] },
   'cost.tokenPricing.inputPricePer1K': { type: 'number', optional: true, min: 0 },

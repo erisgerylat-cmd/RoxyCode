@@ -72,6 +72,8 @@ function zhModeGuide(mode: AgentLoopMode): string {
       return '\u5f53\u524d\u6a21\u5f0f Economic\uff1aReAct \u5de5\u5177\u5faa\u73af\uff0c\u9700\u8981\u5de5\u5177\u65f6\u5148\u8bf4\u660e\u610f\u56fe\uff0c\u518d\u6839\u636e\u7ed3\u679c\u7ee7\u7eed\uff0c\u5e76\u63a7\u5236\u8c03\u7528\u6b21\u6570\u548c\u6210\u672c\u3002';
     case 'standard':
       return '\u5f53\u524d\u6a21\u5f0f Standard\uff1a\u5148\u8ba1\u5212\uff0c\u518d\u6267\u884c\u5de5\u5177\u5faa\u73af\uff0c\u6700\u540e\u9a8c\u8bc1\u3002\u9002\u5408\u4ee3\u7801\u4fee\u6539\u3001\u6392\u9519\u548c\u9879\u76ee\u5ba1\u67e5\u3002';
+    case 'plan':
+      return '\u5f53\u524d\u6a21\u5f0f Plan\uff1a\u53ea\u8bfb\u89c4\u5212\u3002\u4f60\u53ef\u4ee5\u8bfb\u6587\u4ef6\u3001\u5217\u76ee\u5f55\u3001\u641c\u7d22\u3001\u67e5\u770b Git \u72b6\u6001\u548c\u7ef4\u62a4 todo_write \u4efb\u52a1\u6e05\u5355\uff0c\u4f46\u4e0d\u80fd\u5199\u6587\u4ef6\u3001\u7f16\u8f91\u6587\u4ef6\u6216\u6267\u884c Shell\u3002\u6700\u7ec8\u8f93\u51fa\u53ef\u6279\u51c6\u7684\u5b9e\u65bd\u8ba1\u5212\uff0c\u7b49\u7528\u6237\u6279\u51c6\u540e\u518d\u8fdb\u5165\u6267\u884c\u3002';
     case 'ultimate':
       return '\u5f53\u524d\u6a21\u5f0f Ultimate\uff1aCoordinator \u5148\u62c6\u89e3\u4efb\u52a1\uff0c\u591a Agent \u5e76\u884c\u5206\u6790\uff0c\u4e3b Agent \u518d\u5728\u6743\u9650\u4fdd\u62a4\u4e0b\u6267\u884c\u548c\u9a8c\u8bc1\u3002\u9002\u5408\u590d\u6742\u9879\u76ee\u4efb\u52a1\u3002';
   }
@@ -85,6 +87,8 @@ function enModeGuide(mode: AgentLoopMode): string {
       return 'Mode Economic: ReAct tool loop with a small iteration budget and explicit tool intent.';
     case 'standard':
       return 'Mode Standard: plan, execute with tools, then verify.';
+    case 'plan':
+      return 'Mode Plan: read-only planning. You may read files, list directories, search, inspect Git state, and maintain todo_write, but you must not write/edit files or execute shell commands. End with an approvable implementation plan and wait for user approval before execution.';
     case 'ultimate':
       return 'Mode Ultimate: coordinator decomposition, parallel sub-agent analysis, guarded execution, then verification.';
   }
