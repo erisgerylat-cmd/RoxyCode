@@ -6,6 +6,7 @@ import { gitTool } from './git.js';
 import { grepSearchTool } from './grepSearch.js';
 import { listDirectoryTool } from './listDirectory.js';
 import { readFileTool } from './readFile.js';
+import { todoWriteTool } from './todoWrite.js';
 import { writeFileTool } from './writeFile.js';
 
 export { editFileTool } from './editFile.js';
@@ -14,6 +15,8 @@ export { gitTool } from './git.js';
 export { grepSearchTool } from './grepSearch.js';
 export { listDirectoryTool } from './listDirectory.js';
 export { readFileTool } from './readFile.js';
+export { todoWriteTool, TodoStore } from './todoWrite.js';
+export type { TodoItem, TodoStatus, TodoPriority } from './todoWrite.js';
 export { writeFileTool } from './writeFile.js';
 
 export function getBuiltinTools(): Tool[] {
@@ -69,6 +72,13 @@ export function getBuiltinTools(): Tool[] {
       searchHint: 'inspect git status diff log and branches',
       maxResultSizeChars: 50_000,
       shouldDefer: true,
+      concurrency: 'safe',
+      interruptBehavior: 'cancel',
+    }),
+    withToolDefaults(todoWriteTool, {
+      aliases: ['todo', 'todos'],
+      searchHint: 'track multi-step task list within the session',
+      maxResultSizeChars: 20_000,
       concurrency: 'safe',
       interruptBehavior: 'cancel',
     }),

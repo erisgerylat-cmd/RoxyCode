@@ -19,6 +19,7 @@ import { executeCommandTool } from '../src/tool/builtin/executeCommand.js';
 import { gitTool } from '../src/tool/builtin/git.js';
 import { grepSearchTool } from '../src/tool/builtin/grepSearch.js';
 import { readFileTool } from '../src/tool/builtin/readFile.js';
+import { todoWriteTool, TodoStore } from '../src/tool/builtin/todoWrite.js';
 import { McpToolAdapter } from '../src/mcp/McpToolAdapter.js';
 import type { McpServerDefinition, McpToolDefinition } from '../src/mcp/types.js';
 import { StreamingToolExecutor } from '../src/engine/agent/StreamingToolExecutor.js';
@@ -243,6 +244,48 @@ test('builtin tools expose static concurrency and destructive hints', () => {
   assert.equal(read?.destructive, false);
   assert.equal(write?.concurrencySafe, false);
   assert.equal(write?.destructive, true);
+});
+
+test('todo_write manages a single-session task list and enforces one active item', async () => {
+  const todoStore = new TodoStore();
+  const ctx = createContext(createConfig(), { todoStore, permissionMode: 'read-only' });
+  const classification = new PermissionClassifier().classify(todoWriteTool, { operation: 'read' }, ctx);
+
+  assert.equal(classification.behavior, 'allow');
+  assert.equal(todoWriteTool.isReadOnly, true);
+
+  const writeResult = await todoWriteTool.execute?.({
+    operation: 'write',
+    todos: [
+      { id: 'inspect', content: 'Inspect current implementation', status: 'completed', priority: 'high' },
+      { id: 'fix', content: 'Fix TodoWrite integration', activeForm: 'Fixing TodoWrite integration', status: 'in_progress', priority: 'high' },
+      { id: 'verify', content: 'Run focused tests', status: 'pending', priority: 'medium' },
+    ],
+  }, ctx);
+
+  assert.equal(writeResult?.success, true);
+  assert.equal(todoStore.snapshot().total, 3);
+  assert.equal(todoStore.snapshot().activeId, 'fix');
+  assert.match(writeResult?.output ?? '', /todo_write/);
+
+  const updateResult = await todoWriteTool.execute?.({
+    operation: 'update',
+    todos: [{ id: 'fix', status: 'completed' }],
+  }, ctx);
+
+  assert.equal(updateResult?.success, true);
+  assert.equal(todoStore.snapshot().completed, 2);
+
+  const invalidResult = await todoWriteTool.execute?.({
+    operation: 'write',
+    todos: [
+      { id: 'a', content: 'Task A', status: 'in_progress', priority: 'high' },
+      { id: 'b', content: 'Task B', status: 'in_progress', priority: 'medium' },
+    ],
+  }, ctx);
+
+  assert.equal(invalidResult?.success, false);
+  assert.equal(todoStore.snapshot().total, 3);
 });
 
 test('write, edit, list, and git tools emit structured progress events', async () => {

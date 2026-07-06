@@ -9,6 +9,7 @@ import type { LLMProvider } from '../../core/types/llm.js';
 import { userMessage, type Message } from '../../core/types/message.js';
 import { AgentLoop, normalizeAgentMode, type AgentLoopEvent } from '../../engine/agent/index.js';
 import { createDefaultToolRuntime, getBuiltinTools, type ToolExecutor, type ToolRegistry, type ToolPermissionPrompt } from '../../tool/index.js';
+import { TodoStore } from '../../tool/builtin/todoWrite.js';
 import { CommandRegistry, getCategoryMeta, type CommandCategory, type SubcommandDefinition } from '../../commands/CommandRegistry.js';
 import { parseCommand } from '../../commands/CommandParser.js';
 import { createBuiltinCommands } from '../../commands/builtin/index.js';
@@ -70,6 +71,7 @@ export class REPL {
   private readonly runtimeState: RuntimeState;
   private readonly telemetryLogger: TelemetryLogger;
   private readonly sessionStartTime = Date.now();
+  private readonly todoStore = new TodoStore();
   private sessionStore = new SessionStore(process.cwd());
   private readonly memoryStore = new MemoryStore({ cwd: process.cwd() });
 
@@ -603,6 +605,7 @@ export class REPL {
       confirmSecond: prompt => this.confirmToolPrompt(prompt, true),
       hooks: this.hookManager,
       telemetry: this.telemetryLogger,
+      todoStore: this.todoStore,
     });
   }
 

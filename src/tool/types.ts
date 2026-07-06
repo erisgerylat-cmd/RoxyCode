@@ -4,6 +4,7 @@ import type { HookRunner } from '../hooks/types.js';
 import type { ToolCall } from '../core/types/message.js';
 import type { TelemetryLogger } from '../telemetry/index.js';
 import type { FileReadState } from './security/FileReadState.js';
+import type { TodoStore } from './builtin/todoWrite.js';
 
 export type ToolRiskLevel = 'low' | 'medium' | 'high';
 export type ToolConcurrency = 'safe' | 'exclusive';
@@ -113,6 +114,7 @@ export interface ToolExecutionContext {
   hooks?: HookRunner;
   telemetry?: TelemetryLogger;
   fileReadState?: FileReadState;
+  todoStore?: TodoStore;
 }
 
 export interface Tool {

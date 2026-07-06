@@ -8,6 +8,7 @@ import type { Tool, ToolDefinition, ToolExecutor, ToolPermissionPrompt, ToolProg
 import type { TelemetryLogger } from '../../telemetry/index.js';
 import type { MultiAgentEvent } from '../multi-agent/index.js';
 import type { QueryProfileSummary } from '../../runtime/index.js';
+import type { TodoStore } from '../../tool/builtin/todoWrite.js';
 
 export type AgentLoopMode = 'lite' | 'economic' | 'standard' | 'ultimate';
 
@@ -49,6 +50,7 @@ export interface AgentLoopOptions {
   confirmSecond?: (prompt: ToolPermissionPrompt) => Promise<boolean>;
   hooks?: HookRunner;
   telemetry?: TelemetryLogger;
+  todoStore?: TodoStore;
   signal?: AbortSignal;
 }
 

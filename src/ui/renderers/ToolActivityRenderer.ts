@@ -254,6 +254,7 @@ function toolGroup(toolName: string, language: 'zh-CN' | 'en-US'): string {
   if (toolName === 'write_file' || toolName === 'edit_file') return zh ? '\u5199\u5165' : 'write';
   if (toolName === 'execute_command') return 'Shell';
   if (toolName === 'git') return 'Git';
+  if (toolName === 'todo_write') return zh ? 'Todo' : 'Todo';
   return toolName;
 }
 function summarizeArgs(toolName: string, args: Record<string, unknown>, language: 'zh-CN' | 'en-US', argsBuffer: string): string[] {
@@ -274,6 +275,7 @@ function summarizeArgs(toolName: string, args: Record<string, unknown>, language
   if (typeof args.offset === 'number') rows.push(`offset: ${args.offset}`);
   if (typeof args.replaceAll === 'boolean') rows.push(`replaceAll: ${args.replaceAll}`);
   if (content) rows.push(`${label(language, 'content')}: ${formatCount(content.length)} chars`);
+  if (toolName === 'todo_write' && Array.isArray(args.todos)) rows.push(`${label(language, 'todos')}: ${args.todos.length}`);
   if (rows.length === 0 && argsBuffer.length > 0) rows.push(`${label(language, 'arguments')}: ${formatCount(argsBuffer.length)} chars streamed`);
   if (rows.length === 0) {
     const keys = Object.keys(args).slice(0, 4);
@@ -291,6 +293,10 @@ function summarizeResult(result: ToolResult, language: 'zh-CN' | 'en-US'): strin
   pushMeta(parts, metadata, 'matches', language);
   pushMeta(parts, metadata, 'entries', language);
   pushMeta(parts, metadata, 'total', language);
+  pushMeta(parts, metadata, 'pending', language);
+  pushMeta(parts, metadata, 'inProgress', language);
+  pushMeta(parts, metadata, 'completed', language);
+  pushMeta(parts, metadata, 'activeId', language);
   pushMeta(parts, metadata, 'bytes', language);
   pushMeta(parts, metadata, 'totalLines', language);
   pushMeta(parts, metadata, 'timedOut', language);
@@ -342,6 +348,11 @@ function label(language: 'zh-CN' | 'en-US', key: string): string {
     matches: '\u5339\u914d',
     entries: '\u6761\u76ee',
     total: '\u603b\u6570',
+    pending: '\u5f85\u529e',
+    inProgress: '\u8fdb\u884c\u4e2d',
+    completed: '\u5b8c\u6210',
+    activeId: '\u5f53\u524d',
+    todos: 'Todos',
     bytes: '\u5b57\u8282',
     totalLines: '\u603b\u884c\u6570',
     timedOut: '\u8d85\u65f6',

@@ -16,6 +16,7 @@ import { checkTokenBudget, createBudgetTracker, parseTokenBudget, stripTokenBudg
 import { QueryProfiler, type QueryProfileSummary } from '../../runtime/index.js';
 import { StreamingToolExecutor } from './StreamingToolExecutor.js';
 import { createFileReadState } from '../../tool/security/FileReadState.js';
+import { TodoStore } from '../../tool/builtin/todoWrite.js';
 import { loadCharacterPromptContext } from '../../aesthetic/character/CharacterPromptLoader.js';
 import { ProfileManager } from '../../session/profile/ProfileManager.js';
 import type { UserProfile } from '../../profile/types.js';
@@ -305,6 +306,7 @@ export class AgentLoop {
     let totalUsage = { ...ZERO_USAGE };
     let toolIterations = 0;
     const fileReadState = createFileReadState();
+    const todoStore = this.options.todoStore ?? new TodoStore();
     const maxModelCalls = maxIterations + (budget ? 3 : 0);
 
     for (let modelCall = 0; modelCall < maxModelCalls; modelCall++) {
@@ -405,6 +407,7 @@ export class AgentLoop {
           hooks: this.options.hooks,
           telemetry: this.options.telemetry,
           fileReadState,
+          todoStore,
         },
       });
       for (const toolCall of toolCalls) streamingExecutor.addTool(toolCall);
@@ -505,6 +508,5 @@ function profileTelemetryAttributes(profile: QueryProfileSummary): Record<string
     slowestPhaseMs: profile.slowestPhase?.durationMs,
   };
 }
-
 
 
