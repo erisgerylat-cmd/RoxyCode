@@ -68,6 +68,8 @@ export type {
   InstallOptions,
   InstallResult,
   InstalledCharacterPackage,
+  RemoteInstallOptions,
+  RemoteInstallResult,
   CharacterPackageInstallPaths,
   UninstallOptions,
   UninstallResult,

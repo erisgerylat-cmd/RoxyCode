@@ -20,12 +20,28 @@ import {
   writeCharacterPackageInstallMetadata,
 } from './CharacterPackageInstallMetadata.js';
 import { checkRoxyCodeVersionCompatibility } from './VersionCompatibility.js';
+import {
+  StoreClient,
+  type StoreClientOptions,
+  type StoreDownloadResult,
+} from '../marketplace/StoreClient.js';
 
 export interface InstallOptions {
   global?: boolean;
   force?: boolean;
   cwd?: string;
   paths?: CharacterPackageInstallPaths;
+}
+
+export interface RemoteInstallOptions extends InstallOptions {
+  /** StoreClient 配置（baseUrl 必须） */
+  storeOptions: StoreClientOptions;
+  /** 指定版本，省略则安装最新 */
+  version?: string;
+}
+
+export interface RemoteInstallResult extends InstallResult {
+  download: StoreDownloadResult;
 }
 
 export interface UninstallOptions {
@@ -147,6 +163,32 @@ export class CharacterPackageManager {
     } finally {
       await source.cleanup?.();
     }
+  }
+
+  /**
+   * 从 RoxyStore 商城安装：下载到本地缓存 → 强制本地 SHA-256 校验 → 走本地安装。
+   *
+   * 安全约定：即便 StoreClient 已在下载时比对过 sha256，这里仍以"下载得到的本地
+   * .roxychar 文件"为准走完整的本地安装校验链（manifest/character schema、版本兼容、
+   * Zip Slip 防护）。服务端返回的风险等级仅作为提示透传给调用方展示。
+   */
+  async installFromStore(packageName: string, options: RemoteInstallOptions): Promise<RemoteInstallResult> {
+    const client = new StoreClient(options.storeOptions);
+    const download = await client.downloadToCache(packageName, options.version);
+
+    if (download.expectedSha256 && !download.verified) {
+      await rm(download.filePath, { force: true });
+      throw new Error(`SHA-256 校验失败，已放弃安装：${packageName}@${download.version}。`);
+    }
+
+    const result = await this.installPackage(download.filePath, {
+      global: options.global,
+      force: options.force,
+      cwd: options.cwd,
+      paths: options.paths,
+    });
+
+    return { ...result, download };
   }
 
   async updatePackage(packagePath: string, options: UpdateOptions = {}): Promise<UpdateResult> {
