@@ -2,9 +2,11 @@ import chalk from 'chalk';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { ConfigManager } from '../../core/ConfigManager.js';
 import type { CharacterManager } from '../../aesthetic/character/CharacterManager.js';
 import { exportCharacterPackage } from '../../aesthetic/character/custom/CharacterPackageExporter.js';
 import { CharacterPackageManager } from '../../aesthetic/character/custom/CharacterPackageManager.js';
+import { StoreClient, type StoreClientOptions } from '../../aesthetic/character/marketplace/StoreClient.js';
 import { packCharacterPackage } from '../../aesthetic/character/custom/CharacterPackagePacker.js';
 import { verifyCharacterPackageIntegrity } from '../../aesthetic/character/custom/CharacterPackageIntegrity.js';
 import { createCharacterPackageTemplate } from '../../aesthetic/character/custom/CharacterPackageTemplate.js';
@@ -32,11 +34,16 @@ const ID_ALIASES: Record<string, CharacterId> = {
 export async function handleCharacterCommand(
   args: string[],
   characterManager: CharacterManager,
+  configManager?: ConfigManager,
 ): Promise<void> {
   const subCommand = args[0]?.toLowerCase();
 
   if (!subCommand || subCommand === 'list') {
     return showCharacterList(characterManager);
+  }
+
+  if (subCommand === 'search') {
+    return searchStoreCommand(args.slice(1), configManager);
   }
 
   if (subCommand === 'info') {
@@ -58,7 +65,7 @@ export async function handleCharacterCommand(
   }
 
   if (subCommand === 'install') {
-    return installCharacterPackageCommand(args.slice(1), characterManager);
+    return installCharacterPackageCommand(args.slice(1), characterManager, configManager);
   }
 
   if (subCommand === 'uninstall' || subCommand === 'remove') {
@@ -292,16 +299,26 @@ async function showCharacterPackages(args: string[]): Promise<void> {
   console.log('');
 }
 
-async function installCharacterPackageCommand(args: string[], characterManager: CharacterManager): Promise<void> {
-  const packagePath = firstPositional(args);
-  if (!packagePath) {
-    console.log(chalk.red('  缺少角色包路径。'));
-    console.log(chalk.dim('  用法: /character install <path> [--global] [--force]'));
+async function installCharacterPackageCommand(
+  args: string[],
+  characterManager: CharacterManager,
+  configManager?: ConfigManager,
+): Promise<void> {
+  const target = firstPositional(args);
+  if (!target) {
+    console.log(chalk.red('  缺少角色包路径或名称。'));
+    console.log(chalk.dim('  本地: /character install <path> [--global] [--force]'));
+    console.log(chalk.dim('  商城: /character install <name>[@version] [--global] [--force]'));
     return;
   }
 
+  const remote = parseRemoteInstallTarget(target);
+  if (remote && isLikelyRemoteInstall(target)) {
+    return installFromStoreCommand(remote, args, characterManager, configManager);
+  }
+
   try {
-    const result = await new CharacterPackageManager(process.cwd()).installPackage(packagePath, {
+    const result = await new CharacterPackageManager(process.cwd()).installPackage(target, {
       global: args.includes('--global'),
       force: args.includes('--force'),
     });
@@ -318,6 +335,92 @@ async function installCharacterPackageCommand(args: string[], characterManager: 
     console.log(chalk.dim(`  下一步: /character ${result.character.id}`));
   } catch (error) {
     console.log(chalk.red(`  角色包安装失败: ${errorMessage(error)}`));
+  }
+}
+
+async function installFromStoreCommand(
+  remote: { name: string; version?: string },
+  args: string[],
+  characterManager: CharacterManager,
+  configManager?: ConfigManager,
+): Promise<void> {
+  const storeOptions = resolveStoreOptions(configManager);
+  if (!storeOptions) {
+    console.log(chalk.red('  未配置 RoxyStore 商城地址。'));
+    console.log(chalk.dim('  请先设置: /config set store.baseUrl <https://your-roxystore>'));
+    console.log(chalk.dim(`  或使用本地文件安装: /character install ./${remote.name}.roxychar`));
+    return;
+  }
+
+  try {
+    console.log(chalk.dim(`  正在从商城下载 ${remote.name}${remote.version ? `@${remote.version}` : ''} ...`));
+    const result = await new CharacterPackageManager(process.cwd()).installFromStore(remote.name, {
+      storeOptions,
+      version: remote.version,
+      global: args.includes('--global'),
+      force: args.includes('--force'),
+    });
+    await characterManager.loadCustomCharacters();
+
+    const { download } = result;
+    console.log(chalk.green('  角色包已从商城安装'));
+    console.log(`  包名: ${result.manifest.name}`);
+    console.log(`  版本: ${result.manifest.version}`);
+    console.log(`  范围: ${result.scope}`);
+    console.log(`  角色 id: ${result.character.id}`);
+    console.log(`  SHA-256: ${download.sha256}${download.verified ? chalk.green(' (已校验)') : chalk.yellow(' (服务端未提供期望值)')}`);
+    if (download.riskLevel !== 'UNKNOWN') {
+      const riskColor = download.riskLevel === 'LOW' ? chalk.green : download.riskLevel === 'MEDIUM' ? chalk.yellow : chalk.red;
+      console.log(`  风险等级: ${riskColor(download.riskLevel)}${download.riskSummary ? ` - ${download.riskSummary}` : ''}`);
+    }
+    for (const warning of result.warnings) {
+      console.log(chalk.yellow(`  warning: ${warning}`));
+    }
+    console.log(chalk.dim(`  下一步: /character ${result.character.id}`));
+  } catch (error) {
+    console.log(chalk.red(`  从商城安装失败: ${errorMessage(error)}`));
+  }
+}
+
+async function searchStoreCommand(args: string[], configManager?: ConfigManager): Promise<void> {
+  const storeOptions = resolveStoreOptions(configManager);
+  if (!storeOptions) {
+    console.log(chalk.red('  未配置 RoxyStore 商城地址。'));
+    console.log(chalk.dim('  请先设置: /config set store.baseUrl <https://your-roxystore>'));
+    return;
+  }
+
+  const query = positionalArgs(args).join(' ').trim();
+  try {
+    const client = new StoreClient(storeOptions);
+    const results = await client.searchPackages({
+      q: query || undefined,
+      official: args.includes('--official') ? true : undefined,
+      sort: optionValue(args, '--sort'),
+    });
+
+    console.log('');
+    console.log(chalk.bold(`  RoxyStore 角色包${query ? `: "${query}"` : ''}`));
+    if (results.length === 0) {
+      console.log(chalk.dim('  没有匹配的角色包。'));
+      console.log('');
+      return;
+    }
+
+    for (const pkg of results) {
+      const officialTag = pkg.official ? chalk.cyan(' [官方]') : '';
+      const riskTag = pkg.riskLevel !== 'UNKNOWN' ? chalk.dim(` risk:${pkg.riskLevel}`) : '';
+      console.log(`  ${chalk.bold(pkg.name)} ${chalk.dim(`v${pkg.latestVersion}`)}${officialTag}${riskTag}`);
+      console.log(chalk.dim(`    ${pkg.displayName} - ${pkg.description}`));
+      const stats = [`↓ ${pkg.downloads}`];
+      if (typeof pkg.rating === 'number') stats.push(`★ ${pkg.rating.toFixed(1)}`);
+      if (pkg.author) stats.push(`by ${pkg.author}`);
+      console.log(chalk.dim(`    ${stats.join('  ')}`));
+      console.log(chalk.dim(`    安装: /character install ${pkg.name}`));
+    }
+    console.log('');
+  } catch (error) {
+    console.log(chalk.red(`  商城搜索失败: ${errorMessage(error)}`));
   }
 }
 
@@ -637,6 +740,41 @@ function resolveCharacterId(input: string, characterManager: CharacterManager): 
   if (exact) return exact.id;
   const caseInsensitive = characterManager.getCharacterList().find(item => String(item.id).toLowerCase() === normalized);
   return caseInsensitive?.id;
+}
+
+function resolveStoreOptions(configManager?: ConfigManager): StoreClientOptions | undefined {
+  if (!configManager) return undefined;
+  const baseUrl = configManager.get('store.baseUrl');
+  if (typeof baseUrl !== 'string' || !baseUrl.trim()) return undefined;
+  const token = configManager.get('store.token');
+  return {
+    baseUrl: baseUrl.trim(),
+    token: typeof token === 'string' && token.trim() ? token.trim() : undefined,
+  };
+}
+
+/** 解析 `name`、`name@version`、`store:name`、`store:name@version` 形式。 */
+function parseRemoteInstallTarget(target: string): { name: string; version?: string } | undefined {
+  const stripped = target.startsWith('store:') ? target.slice('store:'.length) : target;
+  const atIndex = stripped.lastIndexOf('@');
+  const name = atIndex > 0 ? stripped.slice(0, atIndex) : stripped;
+  const version = atIndex > 0 ? stripped.slice(atIndex + 1) : undefined;
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) return undefined;
+  return { name, version };
+}
+
+/**
+ * 判断是否应走商城安装：显式 store: 前缀，或"不含路径分隔符/扩展名、且本地不存在"的裸包名。
+ * 这样本地相对路径（./x、x.roxychar、含 / 或 \ 的路径）仍走本地安装。
+ */
+function isLikelyRemoteInstall(target: string): boolean {
+  if (target.startsWith('store:')) return true;
+  if (target.includes('/') || target.includes('\\')) return false;
+  if (target.startsWith('.')) return false;
+  if (/\.(roxychar|zip|json)$/i.test(target)) return false;
+  const base = target.includes('@') ? target.slice(0, target.lastIndexOf('@')) : target;
+  if (existsSync(base) || existsSync(target)) return false;
+  return true;
 }
 
 function firstPositional(args: string[]): string | undefined {
