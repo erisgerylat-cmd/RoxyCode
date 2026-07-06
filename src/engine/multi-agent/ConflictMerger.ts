@@ -52,11 +52,17 @@ function formatTaskResult(result: MultiAgentTaskResult, language: 'zh-CN' | 'en-
       ? (isZh ? '冲突' : 'conflict')
       : (isZh ? '失败' : 'failed');
   const scopes = result.fileScopes.length ? result.fileScopes.join(', ') : '*';
+  const worktree = result.worktree
+    ? (isZh
+      ? `- Worktree: ${result.worktree.cleanup} / ${result.worktree.path}${result.worktree.cleanupReason ? ` / ${result.worktree.cleanupReason}` : ''}`
+      : `- Worktree: ${result.worktree.cleanup}; path: ${result.worktree.path}${result.worktree.cleanupReason ? `; reason: ${result.worktree.cleanupReason}` : ''}`)
+    : '';
   return [
     `### ${result.agentId} / ${result.title}`,
     isZh
       ? `- 状态：${status}；角色：${result.role}；文件范围：${scopes}；耗时：${result.duration}ms`
       : `- Status: ${status}; role: ${result.role}; file scopes: ${scopes}; duration: ${result.duration}ms`,
+    worktree,
     result.error ? `- ${isZh ? '错误' : 'Error'}: ${result.error}` : '',
     '',
     result.text.trim(),

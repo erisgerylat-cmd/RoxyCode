@@ -89,6 +89,15 @@ export interface MultiAgentTaskResult {
   duration: number;
   fileScopes: string[];
   error?: string;
+  worktree?: MultiAgentWorktreeInfo;
+}
+
+export interface MultiAgentWorktreeInfo {
+  path: string;
+  branch: string;
+  baseSha: string;
+  cleanup: 'pending' | 'removed' | 'kept' | 'unavailable';
+  cleanupReason?: string;
 }
 
 export interface MultiAgentRunResult {

@@ -6,6 +6,7 @@ import { Coordinator } from './Coordinator.js';
 import { FileLockManager } from './FileLockManager.js';
 import { TaskClaimStore } from './TaskClaimStore.js';
 import { TaskGraph } from './TaskGraph.js';
+import { WorktreeManager, type WorktreeLease } from '../../worktree/WorktreeManager.js';
 import type {
   FileLock,
   MultiAgentConflict,
@@ -15,12 +16,16 @@ import type {
   MultiAgentRuntimeOptions,
   MultiAgentTask,
   MultiAgentTaskResult,
+  MultiAgentWorktreeInfo,
   TaskClaim,
 } from './types.js';
 
 const ZERO_USAGE: LLMUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
 export class MultiAgentRuntime {
+  private worktreeQueue: Promise<void> = Promise.resolve();
+  private worktreeUnavailableReason: string | null = null;
+
   constructor(private readonly options: MultiAgentRuntimeOptions) {}
 
   async *run(input: MultiAgentRunInput): AsyncIterable<MultiAgentEvent, MultiAgentRunResult> {
@@ -154,6 +159,7 @@ export class MultiAgentRuntime {
     task.claimedAt = claimedAt;
 
     let heldLocks: FileLock[] = [];
+    let worktree: TaskWorktree | null = null;
     const started = Date.now();
     try {
       const lockResult = await locks.acquireMany(task.id, agentId, task.fileScopes, task.title);
@@ -170,6 +176,9 @@ export class MultiAgentRuntime {
         };
       }
       heldLocks = lockResult.locks;
+      worktree = await this.createTaskWorktree(task, agentId);
+      const taskCwd = worktree?.lease.path ?? this.options.cwd;
+      const taskRuntimeContext = appendWorktreeContext(input.runtimeContext ?? this.options.runtimeContext ?? null, worktree?.info, this.options.language);
 
       task.status = 'running';
       task.startedAt = new Date().toISOString();
@@ -179,8 +188,8 @@ export class MultiAgentRuntime {
             mode: 'ultimate',
             character: this.options.character,
             language: this.options.language,
-            cwd: this.options.cwd,
-            runtimeContext: input.runtimeContext ?? this.options.runtimeContext ?? null,
+            cwd: taskCwd,
+            runtimeContext: taskRuntimeContext,
           })),
           userMessage(buildSubAgentPrompt(task, allTasks, input.userInput, this.options.language)),
         ],
@@ -198,6 +207,7 @@ export class MultiAgentRuntime {
         usage: llmResult.usage,
         duration: Date.now() - started,
         fileScopes: task.fileScopes,
+        worktree: worktree?.info,
       };
       return {
         task: { ...task, status: 'done', result: llmResult.text, completedAt },
@@ -210,6 +220,7 @@ export class MultiAgentRuntime {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const result = buildFailedResult(task, agentId, message, 'failed', Date.now() - started);
+      if (worktree?.info) result.worktree = worktree.info;
       return {
         task: { ...task, status: 'failed', error: message, completedAt: new Date().toISOString() },
         agentId,
@@ -219,10 +230,50 @@ export class MultiAgentRuntime {
         result,
       };
     } finally {
+      if (worktree) await this.cleanupTaskWorktree(worktree).catch(() => undefined);
       await locks.releaseMany(heldLocks).catch(() => undefined);
       await store.release(task.id).catch(() => undefined);
     }
   }
+
+  private async createTaskWorktree(task: MultiAgentTask, agentId: string): Promise<TaskWorktree | null> {
+    if (process.env.ROXY_MULTI_AGENT_WORKTREE === '0') return null;
+    if (this.worktreeUnavailableReason) return null;
+
+    const manager = new WorktreeManager(this.options.cwd);
+    const slug = safeWorktreeSlug(`${agentId}-${Date.now().toString(36)}`);
+    try {
+      const lease = await this.withWorktreeQueue(() => manager.create({ slug }));
+      const info: MultiAgentWorktreeInfo = {
+        path: lease.path,
+        branch: lease.branch,
+        baseSha: lease.baseSha,
+        cleanup: 'pending',
+      };
+      return { lease, info };
+    } catch (error) {
+      this.worktreeUnavailableReason = error instanceof Error ? error.message : String(error);
+      return null;
+    }
+  }
+
+  private async cleanupTaskWorktree(worktree: TaskWorktree): Promise<void> {
+    const manager = new WorktreeManager(this.options.cwd);
+    const result = await this.withWorktreeQueue(() => manager.remove(worktree.lease));
+    worktree.info.cleanup = result.removed ? 'removed' : 'kept';
+    worktree.info.cleanupReason = result.reason ?? (result.warnings.length > 0 ? result.warnings.join('; ') : undefined);
+  }
+
+  private async withWorktreeQueue<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.worktreeQueue.then(fn, fn);
+    this.worktreeQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+}
+
+interface TaskWorktree {
+  lease: WorktreeLease;
+  info: MultiAgentWorktreeInfo;
 }
 
 interface TaskEventBundle {
@@ -283,6 +334,24 @@ function buildSubAgentPrompt(task: MultiAgentTask, allTasks: MultiAgentTask[], u
   ].join('\n');
 }
 
+function appendWorktreeContext(runtimeContext: string | null, worktree: MultiAgentWorktreeInfo | undefined, language: 'zh-CN' | 'en-US'): string | null {
+  if (!worktree) return runtimeContext;
+  const text = language === 'en-US'
+    ? [
+        'RoxyCode multi-agent worktree isolation:',
+        `- path: ${worktree.path}`,
+        `- branch: ${worktree.branch}`,
+        '- This sub-agent is isolated from the main workspace. It should still analyze only unless the main agent explicitly executes tools later.',
+      ].join('\n')
+    : [
+        'RoxyCode \u591a Agent Worktree \u9694\u79bb:',
+        `- \u8def\u5f84: ${worktree.path}`,
+        `- \u5206\u652f: ${worktree.branch}`,
+        '- \u5b50 Agent \u5904\u4e8e\u72ec\u7acb\u5de5\u4f5c\u6811\u4e2d\uff0c\u4f46\u5f53\u524d\u4ecd\u53ea\u505a\u5206\u6790\uff1b\u771f\u5b9e\u5de5\u5177\u6267\u884c\u7531\u4e3b Agent \u5728\u6743\u9650\u4fdd\u62a4\u4e0b\u5b8c\u6210\u3002',
+      ].join('\n');
+  return [runtimeContext, text].filter(Boolean).join('\n\n') || null;
+}
+
 function buildFailedResult(
   task: MultiAgentTask,
   agentId: string,
@@ -323,6 +392,11 @@ function createRunId(sessionId: string): string {
 
 function safeId(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 48) || 'session';
+}
+
+function safeWorktreeSlug(value: string): string {
+  const safe = value.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 72);
+  return safe || `agent-${Date.now().toString(36)}`;
 }
 
 const ZH = {
