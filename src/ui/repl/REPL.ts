@@ -10,7 +10,7 @@ import type { LLMProvider } from '../../core/types/llm.js';
 import { userMessage, type Message } from '../../core/types/message.js';
 import { AgentLoop, normalizeAgentMode, type AgentLoopEvent, type AgentLoopMode } from '../../engine/agent/index.js';
 import { createDefaultToolRuntime, getBuiltinTools, type ToolExecutor, type ToolRegistry, type ToolPermissionPrompt } from '../../tool/index.js';
-import { TodoStore } from '../../tool/builtin/todoWrite.js';
+import { TodoStore, type TodoItem } from '../../tool/builtin/todoWrite.js';
 import { CommandRegistry, getCategoryMeta, type CommandCategory, type SubcommandDefinition } from '../../commands/CommandRegistry.js';
 import { parseCommand } from '../../commands/CommandParser.js';
 import { createBuiltinCommands } from '../../commands/builtin/index.js';
@@ -28,6 +28,7 @@ import { InteractionRenderer } from '../renderers/InteractionRenderer.js';
 import { StatusBar, type StatusState } from '../renderers/StatusBar.js';
 import { ToolActivityRenderer } from '../renderers/ToolActivityRenderer.js';
 import { SessionStore } from '../../session/store/SessionStore.js';
+import { PlanStore, type PlanRecord } from '../../session/plan/index.js';
 import { AutoMemoryExtractor, MemoryPolicyError, MemoryStore } from '../../session/memory/index.js';
 import { ProfileOnboarding, ProfileManager, ProjectProfileManager } from '../../session/index.js';
 import { HookLoader, HookManager } from '../../hooks/index.js';
@@ -78,6 +79,7 @@ export class REPL {
   private readonly telemetryLogger: TelemetryLogger;
   private readonly sessionStartTime = Date.now();
   private readonly todoStore = new TodoStore();
+  private readonly planStore = new PlanStore({ cwd: process.cwd() });
   private sessionStore = new SessionStore(process.cwd());
   private readonly memoryStore = new MemoryStore({ cwd: process.cwd() });
 
@@ -214,6 +216,10 @@ export class REPL {
       getSessionInfo: () => ({ sessionId: this.sessionStore.sessionId, path: this.sessionStore.path }),
       runAgentPrompt: prompt => this.submitAgentPrompt(prompt),
       runPlanPrompt: prompt => this.submitPlanPrompt(prompt),
+      approvePlan: () => this.approveCurrentPlan(),
+      rejectPlan: reason => this.rejectCurrentPlan(reason),
+      editPlan: text => this.editCurrentPlan(text),
+      showPlan: () => this.showCurrentPlan(),
     });
     this.commandRegistry.registerMany(commands);
   }
@@ -631,22 +637,144 @@ export class REPL {
       return;
     }
 
-    const approved = await this.confirmPlanExecution(planText);
-    if (!approved) {
-      console.log(chalk.dim(zh ? '  \u5df2\u4fdd\u7559\u8ba1\u5212\uff0c\u6ca1\u6709\u6267\u884c\u5199\u5165\u64cd\u4f5c\u3002' : '  Plan kept in the session; no implementation was started.'));
+    const plan = await this.planStore.createPlan({
+      task: input,
+      text: planText,
+      sessionId: this.sessionStore.sessionId,
+      source: 'plan-command',
+      language: this.getLanguage(),
+    });
+    await this.sessionStore.append({
+      type: 'note',
+      note: 'plan created',
+      metadata: {
+        planId: plan.id,
+        status: plan.status,
+        riskLevel: plan.riskLevel,
+        todoCount: plan.todoItems.length,
+        path: this.planStore.getPlanPath(plan.id),
+      },
+    });
+    this.renderPlanSaved(plan);
+  }
+
+  private async approveCurrentPlan(): Promise<void> {
+    const zh = this.getLanguage() === 'zh-CN';
+    const current = await this.planStore.getCurrentPlan();
+    if (!current) {
+      console.log(chalk.yellow(zh ? '  \u6ca1\u6709\u5f85\u6279\u51c6\u7684\u8ba1\u5212\u3002\u5148\u4f7f\u7528 /plan <\u4efb\u52a1> \u751f\u6210\u8ba1\u5212\u3002' : '  No current plan. Run /plan <task> first.'));
       return;
     }
 
+    if (current.status === 'rejected') {
+      console.log(chalk.yellow(zh ? '  \u5f53\u524d\u8ba1\u5212\u5df2\u88ab\u62d2\u7edd\u3002\u8bf7\u4f7f\u7528 /plan edit \u4fee\u6539\uff0c\u6216\u91cd\u65b0 /plan <\u4efb\u52a1>\u3002' : '  Current plan was rejected. Use /plan edit or create a new plan.'));
+      return;
+    }
+
+    if (current.riskLevel === 'high') {
+      const confirmed = await this.confirmHighRiskPlan(current);
+      if (!confirmed) {
+        console.log(chalk.dim(zh ? '  \u9ad8\u98ce\u9669\u8ba1\u5212\u672a\u83b7\u5f97\u4e8c\u6b21\u786e\u8ba4\uff0c\u672a\u6267\u884c\u3002' : '  High-risk plan was not second-confirmed; execution did not start.'));
+        return;
+      }
+    }
+
+    let approved: PlanRecord;
+    try {
+      approved = await this.planStore.approveCurrentPlan();
+    } catch (error) {
+      console.log(chalk.red(`  ${error instanceof Error ? error.message : String(error)}`));
+      return;
+    }
+
+    const seededTodos = this.seedTodosFromPlan(approved);
+    await this.sessionStore.append({
+      type: 'note',
+      note: 'plan approved',
+      metadata: {
+        planId: approved.id,
+        riskLevel: approved.riskLevel,
+        todoCount: seededTodos.length,
+        path: this.planStore.getPlanPath(approved.id),
+      },
+    });
+    console.log(chalk.green(zh ? `  \u8ba1\u5212\u5df2\u6279\u51c6\uff1a${approved.id}` : `  Plan approved: ${approved.id}`));
+    if (seededTodos.length > 0) {
+      console.log(chalk.dim(zh ? `  \u5df2\u751f\u6210 TodoWrite \u4efb\u52a1\uff1a${seededTodos.length} \u9879\uff0c\u7b2c 1 \u9879\u5df2\u6807\u8bb0\u4e3a\u8fdb\u884c\u4e2d\u3002` : `  TodoWrite initialized: ${seededTodos.length} items; first item is in progress.`));
+    }
+
     const executionPrompt = [
-      zh ? '\u7528\u6237\u5df2\u6279\u51c6\u4e0b\u9762\u7684 /plan \u8ba1\u5212\u3002\u8bf7\u6309\u8ba1\u5212\u6267\u884c\uff0c\u5fc5\u8981\u65f6\u4f7f\u7528 todo_write \u8ddf\u8e2a\u8fdb\u5ea6\u3002' : 'The user approved the following /plan result. Implement it now, using todo_write when the task has multiple steps.',
+      zh ? '\u7528\u6237\u5df2\u6279\u51c6\u4e0b\u9762\u7684 /plan \u8ba1\u5212\u3002\u8bf7\u6309\u8ba1\u5212\u6267\u884c\uff0c\u5e76\u5728\u6bcf\u4e2a\u4e3b\u8981\u9636\u6bb5\u4f7f\u7528 todo_write \u66f4\u65b0\u8fdb\u5ea6\u3002' : 'The user approved the following /plan result. Implement it now and use todo_write to update progress at each major step.',
+      zh ? '\u5de5\u4f5c\u533a\u5199\u5165\u3001Shell \u548c Git \u64cd\u4f5c\u4ecd\u7136\u5fc5\u987b\u7ecf\u8fc7 RoxyCode \u6743\u9650\u786e\u8ba4\u3002' : 'Workspace writes, shell commands, and Git operations still require RoxyCode permission checks.',
+      '',
+      `Plan ID: ${approved.id}`,
+      `Plan file: ${this.planStore.getPlanPath(approved.id)}`,
+      `Risk: ${approved.riskLevel}${approved.riskReasons.length ? ` (${approved.riskReasons.join('; ')})` : ''}`,
       '',
       zh ? '\u539f\u59cb\u4efb\u52a1:' : 'Original task:',
-      input,
+      approved.task,
       '',
       zh ? '\u5df2\u6279\u51c6\u8ba1\u5212:' : 'Approved plan:',
-      planText,
+      approved.text,
+      '',
+      zh ? '\u5f53\u524d TodoWrite \u521d\u59cb\u4efb\u52a1:' : 'Initial TodoWrite tasks:',
+      ...seededTodos.map(item => `- [${item.status}] ${item.id}: ${item.content}`),
     ].join('\n');
+
     await this.submitAgentPrompt(executionPrompt);
+    const executed = await this.planStore.markExecuted(approved.id);
+    await this.sessionStore.append({
+      type: 'note',
+      note: 'plan executed',
+      metadata: { planId: executed.id, status: executed.status, path: this.planStore.getPlanPath(executed.id) },
+    });
+  }
+
+  private async rejectCurrentPlan(reason?: string): Promise<void> {
+    const zh = this.getLanguage() === 'zh-CN';
+    try {
+      const plan = await this.planStore.rejectCurrentPlan(reason);
+      await this.sessionStore.append({
+        type: 'note',
+        note: 'plan rejected',
+        metadata: { planId: plan.id, reason, path: this.planStore.getPlanPath(plan.id) },
+      });
+      console.log(chalk.green(zh ? `  \u8ba1\u5212\u5df2\u62d2\u7edd\uff1a${plan.id}` : `  Plan rejected: ${plan.id}`));
+      console.log(chalk.dim(zh ? '  \u672a\u542f\u52a8 AgentLoop\uff0c\u4e5f\u672a\u6267\u884c\u5de5\u4f5c\u533a\u5199\u5165\u3002' : '  AgentLoop was not started and no workspace write was executed.'));
+    } catch (error) {
+      console.log(chalk.yellow(zh ? '  \u6ca1\u6709\u53ef\u62d2\u7edd\u7684\u5f53\u524d\u8ba1\u5212\u3002' : '  No current plan to reject.'));
+    }
+  }
+
+  private async editCurrentPlan(text: string): Promise<void> {
+    const zh = this.getLanguage() === 'zh-CN';
+    try {
+      const plan = await this.planStore.editCurrentPlan({ text, language: this.getLanguage() });
+      await this.sessionStore.append({
+        type: 'note',
+        note: 'plan edited',
+        metadata: {
+          planId: plan.id,
+          riskLevel: plan.riskLevel,
+          todoCount: plan.todoItems.length,
+          path: this.planStore.getPlanPath(plan.id),
+        },
+      });
+      console.log(chalk.green(zh ? `  \u8ba1\u5212\u5df2\u66f4\u65b0\uff1a${plan.id}` : `  Plan updated: ${plan.id}`));
+      this.renderPlanSummary(plan);
+    } catch (error) {
+      console.log(chalk.red(`  ${error instanceof Error ? error.message : String(error)}`));
+    }
+  }
+
+  private async showCurrentPlan(): Promise<void> {
+    const zh = this.getLanguage() === 'zh-CN';
+    const plan = await this.planStore.getCurrentPlan();
+    if (!plan) {
+      console.log(chalk.yellow(zh ? '  \u6ca1\u6709\u5f53\u524d\u8ba1\u5212\u3002\u4f7f\u7528 /plan <\u4efb\u52a1> \u751f\u6210\u4e00\u4e2a\u3002' : '  No current plan. Run /plan <task> to create one.'));
+      return;
+    }
+    this.renderPlanSummary(plan, { includeText: true });
   }
 
   private async runAgentInput(input: string, options: { modeOverride?: AgentLoopMode } = {}): Promise<AgentRunResult> {
@@ -695,13 +823,56 @@ export class REPL {
     return { planningText: planningTexts.join('\n\n'), assistantText: assistantTexts.join('\n\n'), messages: finalMessages };
   }
 
-  private async confirmPlanExecution(planText: string): Promise<boolean> {
+  private renderPlanSaved(plan: PlanRecord): void {
+    const zh = this.getLanguage() === 'zh-CN';
+    const character = this.characterManager.getCurrentCharacter();
+    console.log(chalk.hex(character.theme.success)(zh ? `\n  \u8ba1\u5212\u5df2\u4fdd\u5b58\uff1a${plan.id}` : `\n  Plan saved: ${plan.id}`));
+    this.renderPlanSummary(plan);
+    console.log(chalk.dim(zh
+      ? '  \u4e0b\u4e00\u6b65\uff1a/plan approve \u6267\u884c\uff0c/plan edit <\u6587\u672c> \u4fee\u6539\uff0c/plan reject \u62d2\u7edd\u3002'
+      : '  Next: /plan approve to execute, /plan edit <text> to revise, /plan reject to decline.'));
+  }
+
+  private renderPlanSummary(plan: PlanRecord, options: { includeText?: boolean } = {}): void {
+    const zh = this.getLanguage() === 'zh-CN';
+    const character = this.characterManager.getCurrentCharacter();
+    const accent = chalk.hex(character.theme.accent);
+    const risk = formatPlanRisk(plan, zh);
+    console.log(chalk.bold(`  ${zh ? '\u8ba1\u5212' : 'Plan'} ${plan.id}`));
+    console.log(`  ${zh ? '\u72b6\u6001' : 'Status'}: ${formatPlanStatus(plan.status, zh)}`);
+    console.log(`  ${zh ? '\u98ce\u9669' : 'Risk'}: ${risk}`);
+    if (plan.riskReasons.length > 0) console.log(chalk.dim(`  ${zh ? '\u539f\u56e0' : 'Reasons'}: ${plan.riskReasons.join('; ')}`));
+    console.log(chalk.dim(`  ${zh ? '\u4efb\u52a1' : 'Task'}: ${plan.task}`));
+    console.log(chalk.dim(`  ${zh ? '\u8def\u5f84' : 'Path'}: ${this.planStore.getPlanPath(plan.id)}`));
+    console.log(chalk.dim(`  TodoWrite: ${plan.todoItems.length} ${zh ? '\u9879' : 'items'}`));
+    for (const item of plan.todoItems.slice(0, 8)) {
+      console.log(chalk.dim(`    - [${item.priority}] ${item.content}`));
+    }
+    if (plan.todoItems.length > 8) console.log(chalk.dim(`    ... ${plan.todoItems.length - 8} more`));
+    if (options.includeText) {
+      console.log(accent(`\n  ${zh ? '\u8ba1\u5212\u5185\u5bb9' : 'Plan text'}`));
+      console.log(indentBlock(plan.text));
+    }
+    console.log('');
+  }
+
+  private seedTodosFromPlan(plan: PlanRecord): TodoItem[] {
+    const todos = plan.todoItems.map((item, index) => ({
+      ...item,
+      status: index === 0 ? 'in_progress' as const : 'pending' as const,
+      activeForm: index === 0 ? (this.getLanguage() === 'zh-CN' ? `\u6b63\u5728\u6267\u884c\uff1a${item.content}` : `Working on: ${item.content}`) : item.activeForm,
+    }));
+    if (todos.length > 0) this.todoStore.write(todos);
+    return todos;
+  }
+
+  private async confirmHighRiskPlan(plan: PlanRecord): Promise<boolean> {
     const zh = this.getLanguage() === 'zh-CN';
     const character = this.characterManager.getCurrentCharacter();
     if (!process.stdin.isTTY) {
       console.log(chalk.yellow(zh
-        ? '  \u975e\u4ea4\u4e92\u7ec8\u7aef\u65e0\u6cd5\u6279\u51c6\u8ba1\u5212\uff1b\u672c\u6b21\u53ea\u751f\u6210\u8ba1\u5212\u3002'
-        : '  Non-interactive terminal cannot approve the plan; planning only.'));
+        ? '  \u9ad8\u98ce\u9669\u8ba1\u5212\u9700\u8981\u4ea4\u4e92\u5f0f\u4e8c\u6b21\u786e\u8ba4\uff1b\u5df2\u62d2\u7edd\u6267\u884c\u3002'
+        : '  High-risk plans require interactive second confirmation; execution denied.'));
       return false;
     }
 
@@ -710,12 +881,19 @@ export class REPL {
     if (readerWasActive) this.reader?.pause();
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
-      console.log(chalk.hex(character.theme.accent)(zh ? '\n  \u8ba1\u5212\u5df2\u751f\u6210\uff0c\u662f\u5426\u6279\u51c6\u6267\u884c\uff1f' : '\n  Plan generated. Approve implementation?'));
+      console.log(chalk.hex(character.theme.error)(zh ? '\n  \u9ad8\u98ce\u9669\u8ba1\u5212\u9700\u8981\u4e8c\u6b21\u786e\u8ba4' : '\n  High-risk plan requires second confirmation'));
       console.log(chalk.dim(zh
-        ? `  \u8f93\u5165 y \u6267\u884c\uff0cn \u4ec5\u4fdd\u7559\u8ba1\u5212\u3002\u8ba1\u5212\u957f\u5ea6\uff1a${planText.length} chars`
-        : `  Enter y to execute, n to keep the plan only. Plan length: ${planText.length} chars`));
-      const answer = (await rl.question(chalk.hex(character.theme.primary)(zh ? '  \u6279\u51c6\u6267\u884c? [y/N] ' : '  Approve implementation? [y/N] '))).trim().toLowerCase();
-      return answer === 'y' || answer === 'yes' || answer === '\u662f' || answer === '\u6279\u51c6' || answer === '\u6267\u884c';
+        ? `  \u8fd9\u4e00\u6b65\u5bf9\u7167 Claude Code \u7684 ExitPlanMode \u6743\u9650\u8fb9\u754c\uff1a/plan approve \u662f\u7b2c\u4e00\u6b21\u6279\u51c6\uff0c\u9ad8\u98ce\u9669\u9700\u8981\u518d\u786e\u8ba4\u4e00\u6b21\u3002`
+        : '  Like Claude Code ExitPlanMode, /plan approve is the approval boundary; high-risk plans need one more explicit confirmation.'));
+      if (plan.riskReasons.length > 0) {
+        console.log(chalk.dim(zh ? '  \u98ce\u9669\u539f\u56e0:' : '  Risk reasons:'));
+        for (const reason of plan.riskReasons) console.log(chalk.dim(`    - ${reason}`));
+      }
+      console.log(chalk.dim(zh
+        ? '  \u8f93\u5165 approve \u6216 \u786e\u8ba4 \u7ee7\u7eed\uff1b\u5176\u4ed6\u8f93\u5165\u90fd\u4f1a\u53d6\u6d88\u6267\u884c\u3002'
+        : '  Type approve to continue; anything else cancels execution.'));
+      const answer = (await rl.question(chalk.hex(character.theme.primary)(zh ? '  \u4e8c\u6b21\u786e\u8ba4? [approve/N] ' : '  Second confirmation? [approve/N] '))).trim().toLowerCase();
+      return answer === 'approve' || answer === 'y' || answer === 'yes' || answer === '\u662f' || answer === '\u786e\u8ba4' || answer === '\u6279\u51c6' || answer === '\u6267\u884c';
     } finally {
       rl.close();
       if (readerWasActive && !this.shutdownRequested) this.reader?.resume({ redraw: false });
@@ -1516,6 +1694,26 @@ function phaseLabel(phase: 'analyze' | 'plan' | 'execute' | 'verify' | 'summariz
     summarize: '[总结]',
   }[phase];
 }
+
+function formatPlanStatus(status: PlanRecord['status'], zh: boolean): string {
+  if (!zh) return status;
+  switch (status) {
+    case 'draft': return '\u5f85\u6279\u51c6';
+    case 'approved': return '\u5df2\u6279\u51c6';
+    case 'rejected': return '\u5df2\u62d2\u7edd';
+    case 'executed': return '\u5df2\u6267\u884c';
+  }
+}
+
+function formatPlanRisk(plan: PlanRecord, zh: boolean): string {
+  if (!zh) return plan.riskLevel;
+  switch (plan.riskLevel) {
+    case 'low': return '\u4f4e';
+    case 'medium': return '\u4e2d';
+    case 'high': return '\u9ad8\uff08\u9700\u4e8c\u6b21\u786e\u8ba4\uff09';
+  }
+}
+
 function sanitizeSessionMetadata(value: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {

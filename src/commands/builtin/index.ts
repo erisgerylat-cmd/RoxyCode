@@ -18,6 +18,7 @@ import { handleAestheticCommand } from './aesthetic.js';
 import { handleCharacterCommand } from './character.js';
 import { handleContextCommand } from './context.js';
 import { handleOptimizeCommand } from './optimize.js';
+import { handlePlanCommand } from './plan.js';
 import { handleProfileCommand } from './profile.js';
 import { handleProjectCommand } from './project.js';
 import { handleMemoryCommand } from './memory.js';
@@ -63,6 +64,10 @@ export interface BuiltinCommandFactoryOptions {
   getSessionInfo?: () => { sessionId: string; path: string };
   runAgentPrompt?: (prompt: string) => Promise<void>;
   runPlanPrompt?: (prompt: string) => Promise<void>;
+  approvePlan?: () => Promise<void>;
+  rejectPlan?: (reason?: string) => Promise<void>;
+  editPlan?: (text: string) => Promise<void>;
+  showPlan?: () => Promise<void>;
 }
 
 export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): CommandDefinition[] {
@@ -277,25 +282,27 @@ export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): Co
     },
     {
       name: 'plan',
-      description: isZh ? zh('planDescription') : 'Create a read-only plan, then ask for approval before execution',
+      description: isZh ? zh('planDescription') : 'Create, review, approve, reject, or edit a persisted read-only plan',
       aliases: ['plan-mode'],
       category: 'dev',
       source: 'builtin',
       type: 'local',
-      usage: '/plan <task>',
-      examples: ['/plan refactor the command registry', '/plan 修复登录页表单校验并补测试'],
-      handler: async args => {
-        const prompt = args.join(' ').trim();
-        if (!prompt) {
-          console.log(chalk.yellow(isZh ? '  用法: /plan <任务描述>' : '  Usage: /plan <task>'));
-          return;
-        }
-        if (!options.runPlanPrompt) {
-          console.log(chalk.red(isZh ? '  当前运行环境不支持 /plan。' : '  /plan is not available in this runtime.'));
-          return;
-        }
-        await options.runPlanPrompt(prompt);
-      },
+      usage: '/plan <task>|status|approve|reject|edit',
+      examples: ['/plan refactor the command registry', '/plan status', '/plan approve', '/plan reject scope too broad', '/plan edit 1. Read files 2. Apply minimal patch 3. Run tests'],
+      subcommands: [
+        { name: 'status', description: isZh ? '\u67e5\u770b\u5f53\u524d\u5f85\u6279\u51c6\u8ba1\u5212' : 'Show the current pending plan' },
+        { name: 'approve', description: isZh ? '\u6279\u51c6\u8ba1\u5212\u5e76\u5f00\u59cb\u6267\u884c' : 'Approve the current plan and start execution' },
+        { name: 'reject', description: isZh ? '\u62d2\u7edd\u5f53\u524d\u8ba1\u5212\uff0c\u4e0d\u4fee\u6539\u5de5\u4f5c\u533a' : 'Reject the current plan without changing the workspace', needsInput: true },
+        { name: 'edit', description: isZh ? '\u7f16\u8f91\u5f53\u524d\u8ba1\u5212\u6587\u672c\u5e76\u91cd\u65b0\u8bc4\u4f30\u98ce\u9669' : 'Edit the current plan and recalculate risk', needsInput: true },
+      ],
+      handler: args => handlePlanCommand(args, {
+        language: options.language,
+        runPlanPrompt: options.runPlanPrompt,
+        approvePlan: options.approvePlan,
+        rejectPlan: options.rejectPlan,
+        editPlan: options.editPlan,
+        showPlan: options.showPlan,
+      }),
     },
     {
       name: 'mode',

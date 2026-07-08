@@ -52,9 +52,31 @@ export function buildAgentSystemPrompt(input: SystemPromptInput): string {
 
 export function buildPlanPrompt(userInput: string, language: 'zh-CN' | 'en-US'): string {
   if (language === 'en-US') {
-    return `Create a concise execution plan for this task. Do not call tools in this planning response.\n\nTask:\n${userInput}`;
+    return [
+      'Create a concise, approvable execution plan for this task. Do not call tools in this planning response.',
+      'Use Markdown with these sections:',
+      '## Goal',
+      '## Steps',
+      '- Each step should be an actionable todo item.',
+      '## Risk and Permission Notes',
+      '## Verification',
+      'Keep it specific enough that /plan approve can start execution safely.',
+      '',
+      `Task:\n${userInput}`,
+    ].join('\n');
   }
-  return `\u8bf7\u4e3a\u4e0b\u9762\u4efb\u52a1\u751f\u6210\u7b80\u6d01\u7684\u6267\u884c\u8ba1\u5212\u3002\u672c\u6b21\u53ea\u8f93\u51fa\u8ba1\u5212\uff0c\u4e0d\u8981\u8c03\u7528\u5de5\u5177\u3002\n\n\u4efb\u52a1\uff1a\n${userInput}`;
+  return [
+    '\u8bf7\u4e3a\u4e0b\u9762\u4efb\u52a1\u751f\u6210\u7b80\u6d01\u3001\u53ef\u6279\u51c6\u7684\u6267\u884c\u8ba1\u5212\u3002\u672c\u6b21\u53ea\u8f93\u51fa\u8ba1\u5212\uff0c\u4e0d\u8981\u8c03\u7528\u5de5\u5177\u3002',
+    '\u8bf7\u4f7f\u7528 Markdown \u5e76\u5305\u542b\u4ee5\u4e0b\u7ed3\u6784\uff1a',
+    '## \u76ee\u6807',
+    '## \u6b65\u9aa4',
+    '- \u6bcf\u4e2a\u6b65\u9aa4\u90fd\u5e94\u8be5\u662f\u53ef\u8f6c\u6362\u4e3a TodoWrite \u7684\u53ef\u6267\u884c\u4efb\u52a1\u3002',
+    '## \u98ce\u9669\u4e0e\u6743\u9650\u8bf4\u660e',
+    '## \u9a8c\u8bc1',
+    '\u8ba1\u5212\u8981\u8db3\u591f\u5177\u4f53\uff0c\u4f7f /plan approve \u540e\u53ef\u4ee5\u5b89\u5168\u8fdb\u5165\u6267\u884c\u3002',
+    '',
+    `\u4efb\u52a1\uff1a\n${userInput}`,
+  ].join('\n');
 }
 
 export function buildVerificationPrompt(language: 'zh-CN' | 'en-US'): string {
