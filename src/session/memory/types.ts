@@ -39,6 +39,38 @@ export interface AddMemoryResult {
   created: boolean;
 }
 
+export interface PendingMemoryRecord {
+  id: string;
+  candidate: AddMemoryInput & {
+    scope: MemoryScope;
+    source: 'auto';
+  };
+  reason: string;
+  createdAt: number;
+  sessionId?: string;
+  characterId?: string;
+  policy?: {
+    severity: 'allow' | 'warn';
+    reasons: string[];
+    suggestions: string[];
+  };
+}
+
+export interface QueuePendingMemoryResult {
+  queued: boolean;
+  duplicate: boolean;
+  rejected: boolean;
+  pending?: PendingMemoryRecord;
+  existing?: MemoryRecord | PendingMemoryRecord;
+  reasons: string[];
+  suggestions: string[];
+}
+
+export interface ApprovePendingMemoryResult {
+  pending: PendingMemoryRecord;
+  result: AddMemoryResult;
+}
+
 export interface MemoryListOptions {
   type?: MemoryType;
   scope?: MemoryScope;

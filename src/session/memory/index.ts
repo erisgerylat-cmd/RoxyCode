@@ -10,11 +10,14 @@ export type { MemoryGraph, MemoryGraphEdge, MemoryGraphNode } from './MemoryGrap
 export type {
   AddMemoryInput,
   AddMemoryResult,
+  ApprovePendingMemoryResult,
   MemoryListOptions,
   MemoryRecord,
   MemoryScope,
   MemorySource,
   MemoryType,
+  PendingMemoryRecord,
+  QueuePendingMemoryResult,
 } from './types.js';
 export { MEMORY_TYPES, defaultScopeForMemoryType, isMemoryScope, isMemoryType } from './types.js';
 export { memoryAge, memoryAgeDays, memoryFreshnessText, selectRelevantMemories } from './MemoryRecall.js';
@@ -23,3 +26,7 @@ export { MemoryRetriever, extractSearchTerms } from './MemoryRetriever.js';
 export type { MemoryRetrievalOptions, MemoryRetrievalResult } from './MemoryRetriever.js';
 export { buildAutoMemoryExtractionPrompt } from './MemoryPrompts.js';
 export type { MemoryExtractionPromptOptions } from './MemoryPrompts.js';
+export { buildCharacterMemoryProfile } from './MemoryPersona.js';
+export type { CharacterMemoryProfile } from './MemoryPersona.js';
+export { extractPreferenceMemoryCandidates } from './PreferenceMemoryExtractor.js';
+export type { PreferenceMemoryExtractionOptions } from './PreferenceMemoryExtractor.js';

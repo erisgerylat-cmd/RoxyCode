@@ -29,7 +29,7 @@ import { StatusBar, type StatusState } from '../renderers/StatusBar.js';
 import { ToolActivityRenderer } from '../renderers/ToolActivityRenderer.js';
 import { SessionStore } from '../../session/store/SessionStore.js';
 import { PlanStore, type PlanRecord } from '../../session/plan/index.js';
-import { AutoMemoryExtractor, MemoryPolicyError, MemoryStore } from '../../session/memory/index.js';
+import { AutoMemoryExtractor, extractPreferenceMemoryCandidates, MemoryStore, type PendingMemoryRecord } from '../../session/memory/index.js';
 import { ProfileOnboarding, ProfileManager, ProjectProfileManager } from '../../session/index.js';
 import { HookLoader, HookManager } from '../../hooks/index.js';
 import { McpConfigLoader, McpToolAdapter } from '../../mcp/index.js';
@@ -56,6 +56,13 @@ interface AgentRunResult {
   planningText: string;
   assistantText: string;
   messages: Message[];
+}
+
+interface AutoMemoryQueueSummary {
+  candidates: number;
+  queued: PendingMemoryRecord[];
+  duplicates: number;
+  rejected: number;
 }
 
 export class REPL {
@@ -812,7 +819,8 @@ export class REPL {
           this.agentMessages = nextMessages;
           finalMessages = nextMessages;
           this.runtimeState.updateSession({ messageCount: this.agentMessages.length, turns: this.conversationTurns });
-          void this.extractAutoMemories(nextMessages).catch(() => undefined);
+          const memorySummary = await this.extractAutoMemories(nextMessages).catch(() => null);
+          if (memorySummary) this.renderAutoMemoryQueueSummary(memorySummary);
         }
       }
     } catch (error) {
@@ -1315,9 +1323,9 @@ export class REPL {
         break;
     }
   }
-  private async extractAutoMemories(messages: Message[]): Promise<void> {
+  private async extractAutoMemories(messages: Message[]): Promise<AutoMemoryQueueSummary | null> {
     const enabled = this.configManager.get('memory.auto') !== false;
-    if (!enabled) return;
+    if (!enabled) return null;
     const extractor = new AutoMemoryExtractor({
       llmProvider: this.llmProvider,
       language: this.getLanguage(),
@@ -1325,14 +1333,57 @@ export class REPL {
       sessionId: this.sessionStore.sessionId,
       intervalTurns: 10,
     });
-    const candidates = await extractor.extract(messages);
-    for (const candidate of candidates.slice(0, 5)) {
-      try {
-        await this.memoryStore.add(candidate);
-      } catch (error) {
-        if (error instanceof MemoryPolicyError) continue;
-        throw error;
+    const preferenceCandidates = extractPreferenceMemoryCandidates(messages, {
+      language: this.getLanguage(),
+      sessionId: this.sessionStore.sessionId,
+      characterId: this.characterManager.getCurrentCharacter().id,
+    });
+    const extractedCandidates = await extractor.extract(messages);
+    const candidates = [...preferenceCandidates, ...extractedCandidates].slice(0, 8);
+    if (candidates.length === 0) return null;
+
+    const summary: AutoMemoryQueueSummary = { candidates: candidates.length, queued: [], duplicates: 0, rejected: 0 };
+    for (const candidate of candidates) {
+      const reason = candidate.metadata && candidate.metadata.extractor === 'preference-pattern'
+        ? 'preference-detected'
+        : 'auto-extracted';
+      const result = await this.memoryStore.queuePending(candidate, { reason });
+      if (result.queued && result.pending) summary.queued.push(result.pending);
+      else if (result.duplicate) summary.duplicates++;
+      else if (result.rejected) summary.rejected++;
+    }
+    await this.sessionStore.append({
+      type: 'note',
+      note: 'auto memory review queued',
+      metadata: {
+        candidates: summary.candidates,
+        queued: summary.queued.length,
+        duplicates: summary.duplicates,
+        rejected: summary.rejected,
+      },
+    });
+    return summary;
+  }
+
+  private renderAutoMemoryQueueSummary(summary: AutoMemoryQueueSummary): void {
+    if (summary.candidates === 0) return;
+    const zh = this.getLanguage() === 'zh-CN';
+    const character = this.characterManager.getCurrentCharacter();
+    if (summary.queued.length > 0) {
+      console.log(chalk.hex(character.theme.accent)(zh
+        ? `\n  \u8bb0\u5fc6\u5019\u9009\uff1a${summary.queued.length} \u6761\u5df2\u653e\u5165\u5f85\u786e\u8ba4\u961f\u5217\uff0c\u5c1a\u672a\u5199\u5165\u957f\u671f\u8bb0\u5fc6\u3002`
+        : `\n  Memory review: ${summary.queued.length} candidate(s) queued, not saved to long-term memory yet.`));
+      for (const pending of summary.queued.slice(0, 3)) {
+        console.log(chalk.dim(`  - ${pending.id} ${pending.candidate.scope}/${pending.candidate.type}: ${pending.candidate.content}`));
       }
+      console.log(chalk.dim(zh
+        ? '  \u4f7f\u7528 /memory review \u67e5\u770b\uff0c/memory review approve <id> \u786e\u8ba4\u8bb0\u4f4f\uff0c/memory review reject <id> \u4e22\u5f03\u3002'
+        : '  Use /memory review to inspect, /memory review approve <id> to save, or /memory review reject <id> to discard.'));
+    }
+    if (summary.rejected > 0) {
+      console.log(chalk.dim(zh
+        ? `  ${summary.rejected} \u6761\u5019\u9009\u56e0\u5bc6\u94a5\u3001\u4e34\u65f6\u4efb\u52a1\u6216\u53ef\u4ece\u4ed3\u5e93\u63a8\u5bfc\u7684\u5185\u5bb9\u800c\u672a\u8fdb\u5165\u961f\u5217\u3002`
+        : `  ${summary.rejected} candidate(s) were not queued because they looked sensitive, temporary, or derivable from the repository.`));
     }
   }
   private async initializeSession(): Promise<void> {

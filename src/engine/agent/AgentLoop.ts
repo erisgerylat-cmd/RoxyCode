@@ -97,6 +97,8 @@ export class AgentLoop {
         query: userInput,
         workflows: this.options.config.workflows,
         workflowFiles: this.options.character.extensions?.workflows,
+        character: this.options.character,
+        language: this.options.language,
       }), this.options.language);
       const characterPromptContext = await loadCharacterPromptContext(this.options.character, this.options.language).catch(() => null);
       const runtimeContext = [baseRuntimeContext, characterPromptContext].filter(Boolean).join('\n\n') || null;

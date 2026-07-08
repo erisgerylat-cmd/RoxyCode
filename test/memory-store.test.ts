@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,7 @@ import {
   MemoryRetriever,
   buildMemoryGraph,
   extractMemoryLinks,
+  extractPreferenceMemoryCandidates,
   renderMemoriesForPrompt,
   renderMemoryIndex,
   selectRelevantMemories,
@@ -91,13 +92,13 @@ test('memory store maintains MEMORY.md index and exposes store-level recall', as
     const store = new MemoryStore({ cwd, globalDir });
     const learning = await store.add({
       type: 'learning',
-      content: '学习 TypeScript 时使用 [[typescript-style]]，先讲概念再给最小例子。',
+      content: 'When learning TypeScript, use [[typescript-style]]: explain concepts first, then give a minimal example.',
       summary: 'typescript-style',
       tags: ['typescript', 'teaching'],
     });
     await store.add({
       type: 'workflow',
-      content: '提交前先运行 pnpm test，并用中文说明验证结果。',
+      content: 'Before commit, run pnpm test and explain verification results in Chinese.',
       tags: ['verification'],
     });
 
@@ -113,7 +114,7 @@ test('memory store maintains MEMORY.md index and exposes store-level recall', as
     assert.equal(parsed.some(entry => entry.links.includes('typescript-style')), true);
     assert.equal((await store.loadIndex()).global.length, 2);
 
-    const recalled = await store.recallRelevant('TypeScript 教学方式', { limit: 1 });
+    const recalled = await store.recallRelevant('TypeScript 鏁欏鏂瑰紡', { limit: 1 });
     assert.equal(recalled.length, 1);
     assert.equal(recalled[0].id, learning.record.id);
 
@@ -182,6 +183,46 @@ test('memory store archives records and supports query search over content, summ
   }
 });
 
+test('memory store queues automatic memories for review before saving', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-memory-pending-'));
+  const globalDir = await mkdtemp(join(tmpdir(), 'roxy-memory-global-'));
+  try {
+    const store = new MemoryStore({ cwd, globalDir });
+    const queued = await store.queuePending({
+      type: 'user',
+      content: 'User prefers Chinese explanations with clear engineering tradeoffs.',
+      tags: ['language', 'style'],
+      sessionId: 'session-1',
+      characterId: 'roxy',
+    });
+
+    assert.equal(queued.queued, true);
+    assert.equal((await store.list()).length, 0);
+    assert.equal((await store.listPending()).length, 1);
+
+    const approved = await store.approvePending(queued.pending!.id.slice(0, 14));
+    assert.ok(approved);
+    assert.equal(approved.result.created, true);
+    assert.equal((await store.list()).length, 1);
+    assert.equal((await store.listPending()).length, 0);
+
+    const duplicate = await store.queuePending({
+      type: 'user',
+      content: 'User prefers Chinese explanations with clear engineering tradeoffs.',
+    });
+    assert.equal(duplicate.duplicate, true);
+
+    const rejected = await store.queuePending({
+      type: 'user',
+      content: 'api_key=sk-test_secret_value_1234567890',
+    });
+    assert.equal(rejected.rejected, true);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+    await rm(globalDir, { recursive: true, force: true });
+  }
+});
+
 test('memory policy blocks secrets, raw code, stack traces, temporary state, activity logs, and dangerous workflows', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'roxy-memory-policy-'));
   const globalDir = await mkdtemp(join(tmpdir(), 'roxy-memory-global-'));
@@ -201,11 +242,11 @@ test('memory policy blocks secrets, raw code, stack traces, temporary state, act
       MemoryPolicyError,
     );
     await assert.rejects(
-      store.add({ type: 'project', content: '当前正在修复登录页，这轮对话下一步先改按钮样式。' }),
+      store.add({ type: 'project', content: 'currently fixing login page; todo for this turn is button style.' }),
       MemoryPolicyError,
     );
     await assert.rejects(
-      store.add({ type: 'project', content: '最近 PR 活动日志显示昨天合并了支付分支。' }),
+      store.add({ type: 'project', content: 'recent changes activity log says commit abcdef1 merged PR #12 yesterday.' }),
       MemoryPolicyError,
     );
     await assert.rejects(
@@ -226,24 +267,24 @@ test('memory policy allows RoxyCode learning/workflow memories and blocks local 
 
     const learning = await store.add({
       type: 'learning',
-      content: '讲解 Vue 页面时先用中文解释业务意图，再给一个最小代码例子，适合初学者复盘。',
+      content: 'When explaining Vue pages, explain business intent first, then give a minimal example for beginners.',
       tags: ['vue', 'teaching'],
     });
     const workflow = await store.add({
       type: 'workflow',
-      content: '每次完成修改之后先检查测试输出，再用中文说明验证结果和剩余风险。',
+      content: 'After each code change, check test output and explain verification results and residual risk in Chinese.',
       tags: ['review'],
     });
     const reference = await store.add({
       type: 'reference',
-      content: '团队 UI 规范在 https://docs.example.test/ui-guidelines ，做页面前先查这个外部文档。',
+      content: 'Team UI guidelines are at https://docs.example.test/ui-guidelines and should be checked before page work.',
     });
 
     assert.equal(learning.created, true);
     assert.equal(workflow.created, true);
     assert.equal(reference.record.scope, 'project');
     await assert.rejects(
-      store.add({ type: 'reference', content: '参考 src/server/auth.ts 里的登录流程。' }),
+      store.add({ type: 'reference', content: 'Reference src/server/auth.ts for login flow.' }),
       MemoryPolicyError,
     );
   } finally {
@@ -257,13 +298,13 @@ test('renderMemoriesForPrompt groups by type and adds stale-memory warnings', ()
   const records: MemoryRecord[] = [
     createMemoryRecord({
       type: 'learning',
-      content: '讲 TypeScript 时先解释概念，再给代码例子。',
+      content: 'Explain TypeScript concepts first, then give code examples.',
       tags: ['typescript'],
       updatedAt: now - 3 * 86_400_000,
     }),
     createMemoryRecord({
       type: 'workflow',
-      content: '提交前先运行 pnpm test 并说明失败原因。',
+      content: 'Before final response, run pnpm test and explain failure reasons.',
       source: 'auto',
       updatedAt: now,
     }),
@@ -306,10 +347,43 @@ test('selectRelevantMemories prioritizes tagged and task-relevant memories', () 
     }),
   ];
 
-  const selected = selectRelevantMemories('请用 TypeScript 教学方式解释泛型，适合初学者', records, { limit: 2, now });
+  const selected = selectRelevantMemories('Please explain TypeScript generics with beginner-friendly teaching style.', records, { limit: 2, now });
 
   assert.equal(selected[0].id, 'learning-ts');
   assert.ok(selected.every(record => record.id !== 'workflow-build'));
+});
+
+test('preference extractor detects explicit language tech stack and explanation preferences', () => {
+  const memories = extractPreferenceMemoryCandidates([
+    userMessage('我希望以后都用中文，技术栈常用 Vue TypeScript Spring Boot，解释详细一点，方便我学习工程思路。'),
+  ], { language: 'zh-CN', sessionId: 'session-1', characterId: 'roxy' });
+
+  assert.ok(memories.some(memory => memory.type === 'user' && memory.tags?.includes('zh-cn')));
+  assert.ok(memories.some(memory => memory.type === 'user' && memory.tags?.includes('tech-stack')));
+  assert.ok(memories.some(memory => memory.type === 'learning' && memory.tags?.includes('deep')));
+  assert.ok(memories.every(memory => memory.source === 'auto'));
+});
+
+test('memory retriever can bias relevant results by character preferred types', () => {
+  const now = Date.now();
+  const records: MemoryRecord[] = [
+    createMemoryRecord({
+      id: 'learning-testing',
+      type: 'learning',
+      content: 'When discussing testing, explain concepts with beginner-friendly examples.',
+      updatedAt: now,
+    }),
+    createMemoryRecord({
+      id: 'feedback-testing',
+      type: 'feedback',
+      content: 'When discussing testing, prioritize review findings and regression risk.',
+      updatedAt: now,
+    }),
+  ];
+
+  const ranked = new MemoryRetriever(records, { now }).retrieve('testing', { preferredTypes: ['feedback'], limit: 2 });
+  assert.equal(ranked[0].record.id, 'feedback-testing');
+  assert.ok(ranked[0].reasons.includes('character-prefers:feedback'));
 });
 
 test('memory retriever uses TF-IDF style ranking and store recall caps top five', async () => {
@@ -331,7 +405,7 @@ test('memory retriever uses TF-IDF style ranking and store recall caps top five'
       });
     }
 
-    const recalled = await store.recallRelevant('支付 payment reconciliation 文档在哪里', { limit: 5 });
+    const recalled = await store.recallRelevant('Where are the payment reconciliation docs?', { limit: 5 });
     assert.equal(recalled.length <= 5, true);
     assert.equal(recalled[0].id, target.record.id);
 
@@ -371,8 +445,8 @@ test('auto memory extractor parses fenced JSON and filters invalid candidates', 
   });
 
   const memories = await extractor.extract([
-    userMessage('以后讲 TypeScript 先讲概念再给例子。'),
-    assistantMessage('我会按这个方式解释。'),
+    userMessage('Explain TypeScript concepts before examples.'),
+    assistantMessage('Okay, I will use that explanation order.'),
   ]);
 
   assert.equal(provider.calls, 1);
@@ -396,15 +470,15 @@ test('auto memory extractor can extract Claude-style core memory types with no t
   const extractor = new AutoMemoryExtractor({ llmProvider: provider, language: 'zh-CN', characterId: 'roxy' });
 
   const memories = await extractor.extract([
-    userMessage('我喜欢简洁中文。支付文档在 https://docs.example.test/payments。'),
-    assistantMessage('收到，我会只保存长期有用的信息。'),
+    userMessage('I prefer concise Chinese. Payment docs are at https://docs.example.test/payments.'),
+    assistantMessage('Noted. I will only save durable information.'),
   ]);
 
   assert.deepEqual(memories.map(memory => memory.type), ['user', 'feedback', 'project', 'reference']);
   assert.equal(provider.chatCalls.length, 1);
   assert.deepEqual(provider.chatCalls[0].tools, []);
   assert.equal(provider.chatCalls[0].toolChoice, 'none');
-  assert.match(JSON.stringify(provider.chatCalls[0].messages), /受限的长期记忆提取子 Agent|restricted child agent/i);
+  assert.match(JSON.stringify(provider.chatCalls[0].messages), /鍙楅檺鐨勯暱鏈熻蹇嗘彁鍙栧瓙 Agent|restricted child agent/i);
 });
 
 test('auto memory extractor supports turn interval gating', async () => {
@@ -423,8 +497,8 @@ test('auto memory extractor returns empty candidates on provider failure or shor
   const failing = new FakeProvider('', true);
   const extractor = new AutoMemoryExtractor({ llmProvider: failing, language: 'zh-CN' });
 
-  assert.deepEqual(await extractor.extract([userMessage('记住我喜欢中文。')]), []);
-  assert.deepEqual(await extractor.extract([userMessage('记住我喜欢中文。'), assistantMessage('好的。')]), []);
+  assert.deepEqual(await extractor.extract([userMessage('Remember that I prefer Chinese.')]), []);
+  assert.deepEqual(await extractor.extract([userMessage('Remember that I prefer Chinese.'), assistantMessage('Okay.')]), []);
 });
 
 function createMemoryRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {

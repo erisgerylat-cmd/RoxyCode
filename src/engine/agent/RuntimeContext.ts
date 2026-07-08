@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { Character } from '../../aesthetic/character/types.js';
 import type { Language } from '../../i18n/index.js';
-import { MemoryStore, renderMemoriesForPrompt, type MemoryRecord } from '../../session/memory/index.js';
+import { buildCharacterMemoryProfile, MemoryStore, renderMemoriesForPrompt, type MemoryRecord } from '../../session/memory/index.js';
 import { WorkflowLoader, type WorkflowDefinition } from '../../workflow/index.js';
 
 export interface RuntimeContextOptions {
@@ -12,6 +13,8 @@ export interface RuntimeContextOptions {
     directories?: string[];
   };
   workflowFiles?: string[];
+  character?: Character;
+  language?: Language;
 }
 
 export interface RuntimeContextSnapshot {
@@ -19,11 +22,13 @@ export interface RuntimeContextSnapshot {
   projectJson?: Record<string, unknown>;
   profile?: Record<string, unknown>;
   memories?: MemoryRecord[];
+  memoryGuidance?: string;
   workflows?: WorkflowDefinition[];
 }
 
 export async function loadRuntimeContext(cwd: string = process.cwd(), options: RuntimeContextOptions = {}): Promise<RuntimeContextSnapshot> {
   const memoryStore = new MemoryStore({ cwd });
+  const memoryProfile = options.character ? buildCharacterMemoryProfile(options.character, options.language ?? 'zh-CN') : null;
   const workflowLoader = new WorkflowLoader({
     cwd,
     builtin: options.workflows?.builtin ?? true,
@@ -34,7 +39,9 @@ export async function loadRuntimeContext(cwd: string = process.cwd(), options: R
     readTextIfExists(join(cwd, 'ROXY.md'), 16_000),
     readJsonIfExists(join(cwd, '.roxycode', 'project.json')),
     readJsonIfExists(join(cwd, '.roxycode', 'profile.json')),
-    options.query ? memoryStore.recallRelevant(options.query, { limit: 5 }) : memoryStore.list({ limit: 5 }),
+    options.query
+      ? memoryStore.recallRelevant(options.query, { limit: 5, preferredTypes: memoryProfile?.preferredTypes })
+      : memoryStore.list({ limit: 5 }),
     workflowLoader.load().catch(() => ({ workflows: [] as WorkflowDefinition[] })),
   ]);
 
@@ -43,6 +50,7 @@ export async function loadRuntimeContext(cwd: string = process.cwd(), options: R
     projectJson,
     profile,
     memories,
+    memoryGuidance: memoryProfile?.guidance,
     workflows: workflowResult.workflows,
   };
 }
@@ -74,6 +82,12 @@ export function renderRuntimeContext(snapshot: RuntimeContextSnapshot, language:
 
   const memoryContext = renderMemoriesForPrompt(snapshot.memories ?? [], language);
   if (memoryContext) sections.push(memoryContext);
+  if (snapshot.memoryGuidance) {
+    sections.push([
+      isZh ? '## \u89d2\u8272\u5316\u8bb0\u5fc6\u4f7f\u7528\u7b56\u7565' : '## Character Memory Strategy',
+      snapshot.memoryGuidance,
+    ].join('\n'));
+  }
 
   const workflowContext = renderWorkflowContext(snapshot.workflows ?? [], language);
   if (workflowContext) sections.push(workflowContext);

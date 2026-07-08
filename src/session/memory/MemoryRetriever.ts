@@ -4,6 +4,7 @@ export interface MemoryRetrievalOptions {
   limit?: number;
   now?: number;
   minScore?: number;
+  preferredTypes?: MemoryType[];
 }
 
 export interface MemoryRetrievalResult {
@@ -28,6 +29,7 @@ const TAG_WEIGHT = 3;
 const MANUAL_SOURCE_BOOST = 0.15;
 const RECENT_MEMORY_BOOST = 0.2;
 const STALE_MEMORY_PENALTY = 0.2;
+const TYPE_PREFERENCE_BOOST = 0.6;
 
 const EN_STOP_WORDS = new Set([
   'about',
@@ -56,12 +58,12 @@ const EN_STOP_WORDS = new Set([
 ]);
 
 const TYPE_HINTS: Record<MemoryType, string[]> = {
-  user: ['user', 'preference', 'prefer', 'style', 'role', 'goal', '我', '用户', '偏好', '习惯', '角色', '目标'],
-  project: ['project', 'deadline', 'decision', 'incident', 'goal', '项目', '需求', '背景', '决策', '事故', '截止'],
-  feedback: ['feedback', 'correction', 'avoid', 'stop', 'review', '反馈', '纠正', '不要', '避免', '审查'],
-  reference: ['reference', 'doc', 'docs', 'link', 'ticket', 'dashboard', '参考', '文档', '链接', '工单', '看板'],
-  learning: ['learn', 'learning', 'teach', 'explain', 'beginner', '学习', '教学', '解释', '初学', '概念'],
-  workflow: ['workflow', 'command', 'branch', 'commit', 'review', 'test', '流程', '命令', '分支', '提交', '测试'],
+  user: ['user', 'preference', 'prefer', 'style', 'role', 'goal', 'language', 'techstack', '\u6211', '\u7528\u6237', '\u504f\u597d', '\u4e60\u60ef', '\u89d2\u8272', '\u76ee\u6807', '\u8bed\u8a00', '\u6280\u672f\u6808'],
+  project: ['project', 'deadline', 'decision', 'incident', 'goal', 'requirement', '\u9879\u76ee', '\u9700\u6c42', '\u80cc\u666f', '\u51b3\u7b56', '\u4e8b\u6545', '\u622a\u6b62'],
+  feedback: ['feedback', 'correction', 'avoid', 'stop', 'review', '\u53cd\u9988', '\u7ea0\u6b63', '\u4e0d\u8981', '\u907f\u514d', '\u5ba1\u67e5'],
+  reference: ['reference', 'doc', 'docs', 'link', 'ticket', 'dashboard', '\u53c2\u8003', '\u6587\u6863', '\u94fe\u63a5', '\u5de5\u5355', '\u770b\u677f'],
+  learning: ['learn', 'learning', 'teach', 'explain', 'beginner', 'depth', '\u5b66\u4e60', '\u6559\u5b66', '\u89e3\u91ca', '\u521d\u5b66', '\u6982\u5ff5', '\u6df1\u5ea6'],
+  workflow: ['workflow', 'command', 'branch', 'commit', 'review', 'test', '\u6d41\u7a0b', '\u547d\u4ee4', '\u5206\u652f', '\u63d0\u4ea4', '\u6d4b\u8bd5'],
 };
 
 export class MemoryRetriever {
@@ -85,8 +87,9 @@ export class MemoryRetriever {
 
     const limit = Math.max(1, options.limit ?? DEFAULT_RECALL_LIMIT);
     const minScore = options.minScore ?? 0;
+    const preferredTypes = new Set(options.preferredTypes ?? []);
     return this.indexed
-      .map(item => this.score(item, queryTerms))
+      .map(item => this.score(item, queryTerms, preferredTypes))
       .filter(result => result.score > minScore)
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
@@ -95,7 +98,7 @@ export class MemoryRetriever {
       .slice(0, limit);
   }
 
-  private score(item: IndexedMemory, queryTerms: string[]): MemoryRetrievalResult {
+  private score(item: IndexedMemory, queryTerms: string[], preferredTypes: ReadonlySet<MemoryType>): MemoryRetrievalResult {
     const matchedTerms: string[] = [];
     const reasons: string[] = [];
     let score = 0;
@@ -120,9 +123,14 @@ export class MemoryRetriever {
       reasons.push(`type:${item.record.type}`);
     }
 
-    if (item.record.scope === 'project' && queryTerms.some(term => ['项目', '需求', 'project', 'repo'].includes(term))) {
+    if (item.record.scope === 'project' && queryTerms.some(term => ['\u9879\u76ee', '\u9700\u6c42', 'project', 'repo'].includes(term))) {
       score += 0.3;
       reasons.push('scope:project');
+    }
+
+    if (score > 0 && preferredTypes.has(item.record.type)) {
+      score += TYPE_PREFERENCE_BOOST;
+      reasons.push(`character-prefers:${item.record.type}`);
     }
 
     if (score <= 0) return { record: item.record, score: 0, matchedTerms: [], reasons: [] };

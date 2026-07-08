@@ -2,9 +2,20 @@ import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { MEMORY_TYPES, type AddMemoryInput, type AddMemoryResult, type MemoryListOptions, type MemoryRecord, type MemoryScope, type MemoryType } from './types.js';
-import { defaultScopeForMemoryType } from './types.js';
-import { assertMemoryPolicy } from './MemoryPolicy.js';
+import {
+  MEMORY_TYPES,
+  type AddMemoryInput,
+  type AddMemoryResult,
+  type ApprovePendingMemoryResult,
+  type MemoryListOptions,
+  type MemoryRecord,
+  type MemoryScope,
+  type MemoryType,
+  type PendingMemoryRecord,
+  type QueuePendingMemoryResult,
+} from './types.js';
+import { defaultScopeForMemoryType, isMemoryScope, isMemoryType } from './types.js';
+import { assertMemoryPolicy, evaluateMemoryCandidate } from './MemoryPolicy.js';
 import { memoryAge, memoryFreshnessText, selectRelevantMemories, type MemoryRecallOptions } from './MemoryRecall.js';
 import { parseMemoryIndex, renderMemoryIndex, type MemoryIndexEntry } from './MemoryIndex.js';
 
@@ -23,6 +34,7 @@ export interface MemoryStats {
   auto: number;
   latestUpdatedAt?: number;
   latestAge?: string;
+  pending: number;
   paths: Record<MemoryScope, string>;
 }
 
@@ -42,6 +54,7 @@ export class MemoryStore {
   readonly projectPath: string;
   readonly globalIndexPath: string;
   readonly projectIndexPath: string;
+  readonly pendingPath: string;
 
   constructor(options: MemoryStoreOptions = {}) {
     this.cwd = options.cwd ?? process.cwd();
@@ -51,6 +64,7 @@ export class MemoryStore {
     this.projectPath = join(this.projectDir, 'memory.jsonl');
     this.globalIndexPath = join(this.globalDir, 'MEMORY.md');
     this.projectIndexPath = join(this.projectDir, 'MEMORY.md');
+    this.pendingPath = join(this.projectDir, 'memory.pending.json');
   }
 
   async add(input: AddMemoryInput): Promise<AddMemoryResult> {
@@ -84,6 +98,118 @@ export class MemoryStore {
 
   async saveMemory(input: AddMemoryInput): Promise<AddMemoryResult> {
     return this.add(input);
+  }
+
+  async queuePending(input: AddMemoryInput, options: { reason?: string } = {}): Promise<QueuePendingMemoryResult> {
+    const scope = input.scope ?? defaultScopeForMemoryType(input.type);
+    const content = normalizeContent(input.content);
+    const evaluation = evaluateMemoryCandidate({ ...input, scope, content, source: 'auto' });
+    if (!evaluation.allowed) {
+      return {
+        queued: false,
+        duplicate: false,
+        rejected: true,
+        reasons: evaluation.reasons,
+        suggestions: evaluation.suggestions,
+      };
+    }
+
+    const existingMemory = await this.findDuplicate(content, input.type, scope);
+    if (existingMemory) {
+      return {
+        queued: false,
+        duplicate: true,
+        rejected: false,
+        existing: existingMemory,
+        reasons: [],
+        suggestions: [],
+      };
+    }
+
+    const pending = await this.listPending();
+    const existingPending = pending.find(record => record.candidate.type === input.type
+      && record.candidate.scope === scope
+      && normalizeForCompare(record.candidate.content) === normalizeForCompare(content));
+    if (existingPending) {
+      return {
+        queued: false,
+        duplicate: true,
+        rejected: false,
+        existing: existingPending,
+        reasons: [],
+        suggestions: [],
+      };
+    }
+
+    const now = Date.now();
+    const record: PendingMemoryRecord = {
+      id: createPendingMemoryId(input.type),
+      candidate: {
+        ...input,
+        scope,
+        source: 'auto',
+        content,
+        tags: normalizeTags(input.tags),
+        summary: input.summary?.trim() || undefined,
+        confidence: clampConfidence(input.confidence),
+        sessionId: input.sessionId,
+        characterId: input.characterId,
+      },
+      reason: options.reason ?? 'auto-extracted',
+      createdAt: now,
+      sessionId: input.sessionId,
+      characterId: input.characterId,
+      policy: evaluation.severity === 'warn'
+        ? { severity: evaluation.severity, reasons: evaluation.reasons, suggestions: evaluation.suggestions }
+        : { severity: 'allow', reasons: [], suggestions: evaluation.suggestions },
+    };
+
+    await this.writePending([...pending, record]);
+    return {
+      queued: true,
+      duplicate: false,
+      rejected: false,
+      pending: record,
+      reasons: evaluation.reasons,
+      suggestions: evaluation.suggestions,
+    };
+  }
+
+  async listPending(): Promise<PendingMemoryRecord[]> {
+    if (!existsSync(this.pendingPath)) return [];
+    try {
+      const parsed = JSON.parse(await readFile(this.pendingPath, 'utf8')) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.flatMap(item => normalizePendingRecord(item));
+    } catch {
+      return [];
+    }
+  }
+
+  async approvePending(id: string): Promise<ApprovePendingMemoryResult | null> {
+    const pending = await this.listPending();
+    const index = findPendingIndex(pending, id);
+    if (index < 0) return null;
+    const [record] = pending.splice(index, 1);
+    const result = await this.add(record.candidate);
+    await this.writePending(pending);
+    return { pending: record, result };
+  }
+
+  async rejectPending(id: string, reason?: string): Promise<PendingMemoryRecord | null> {
+    const pending = await this.listPending();
+    const index = findPendingIndex(pending, id);
+    if (index < 0) return null;
+    const [record] = pending.splice(index, 1);
+    await this.writePending(pending);
+    void reason;
+    return record;
+  }
+
+  async clearPending(): Promise<number> {
+    const pending = await this.listPending();
+    await this.writePending([]);
+    return pending.length;
   }
 
   async list(options: MemoryListOptions = {}): Promise<MemoryRecord[]> {
@@ -201,6 +327,7 @@ export class MemoryStore {
       auto,
       latestUpdatedAt,
       latestAge: latestUpdatedAt ? memoryAge(latestUpdatedAt, options.language ?? 'zh-CN') : undefined,
+      pending: (await this.listPending()).length,
       paths: this.getPaths(),
     };
   }
@@ -242,6 +369,11 @@ export class MemoryStore {
     const records = await this.list({ scope, includeArchived: false });
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, renderMemoryIndex(records, { scope }), 'utf8');
+  }
+
+  private async writePending(records: PendingMemoryRecord[]): Promise<void> {
+    await mkdir(dirname(this.pendingPath), { recursive: true });
+    await writeFile(this.pendingPath, `${JSON.stringify(records, null, 2)}\n`, 'utf8');
   }
 }
 
@@ -304,4 +436,59 @@ function createMemoryId(type: MemoryType): string {
     ? crypto.randomUUID().slice(0, 8)
     : Math.random().toString(36).slice(2, 10);
   return `${type}-${Date.now().toString(36)}-${random}`;
+}
+
+function createPendingMemoryId(type: MemoryType): string {
+  return `pending-${createMemoryId(type)}`;
+}
+
+function findPendingIndex(records: PendingMemoryRecord[], id: string): number {
+  return records.findIndex(record => record.id === id || record.id.startsWith(id));
+}
+
+function normalizePendingRecord(value: unknown): PendingMemoryRecord[] {
+  if (!value || typeof value !== 'object') return [];
+  const raw = value as Record<string, unknown>;
+  const candidateRaw = raw.candidate;
+  if (!candidateRaw || typeof candidateRaw !== 'object') return [];
+  const candidate = candidateRaw as Record<string, unknown>;
+  if (!isMemoryType(candidate.type)) return [];
+  if (!isMemoryScope(candidate.scope)) return [];
+  if (candidate.source !== 'auto') return [];
+  if (typeof candidate.content !== 'string' || !candidate.content.trim()) return [];
+  const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id : createPendingMemoryId(candidate.type);
+  const tags = Array.isArray(candidate.tags) ? normalizeTags(candidate.tags.map(String)) : [];
+  const createdAt = typeof raw.createdAt === 'number' ? raw.createdAt : Date.now();
+  return [{
+    id,
+    candidate: {
+      type: candidate.type,
+      scope: candidate.scope,
+      source: 'auto',
+      content: normalizeContent(candidate.content),
+      summary: typeof candidate.summary === 'string' ? candidate.summary : undefined,
+      tags,
+      confidence: typeof candidate.confidence === 'number' ? clampConfidence(candidate.confidence) : undefined,
+      sessionId: typeof candidate.sessionId === 'string' ? candidate.sessionId : undefined,
+      characterId: typeof candidate.characterId === 'string' ? candidate.characterId : undefined,
+      metadata: candidate.metadata && typeof candidate.metadata === 'object' ? candidate.metadata as Record<string, unknown> : undefined,
+    },
+    reason: typeof raw.reason === 'string' ? raw.reason : 'auto-extracted',
+    createdAt,
+    sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : undefined,
+    characterId: typeof raw.characterId === 'string' ? raw.characterId : undefined,
+    policy: normalizePendingPolicy(raw.policy),
+  }];
+}
+
+function normalizePendingPolicy(value: unknown): PendingMemoryRecord['policy'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const severity = raw.severity === 'warn' ? 'warn' : raw.severity === 'allow' ? 'allow' : undefined;
+  if (!severity) return undefined;
+  return {
+    severity,
+    reasons: Array.isArray(raw.reasons) ? raw.reasons.map(String) : [],
+    suggestions: Array.isArray(raw.suggestions) ? raw.suggestions.map(String) : [],
+  };
 }

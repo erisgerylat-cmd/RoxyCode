@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import type { CharacterManager } from '../../aesthetic/character/CharacterManager.js';
 import type { ConfigManager } from '../../core/ConfigManager.js';
 import { normalizeLanguage } from '../../i18n/index.js';
-import { MemoryPolicyError, MemoryStore, MEMORY_TYPES, isMemoryScope, isMemoryType, type MemoryScope, type MemoryType } from '../../session/memory/index.js';
+import { MemoryPolicyError, MemoryStore, MEMORY_TYPES, isMemoryScope, isMemoryType, type MemoryScope, type MemoryType, type PendingMemoryRecord } from '../../session/memory/index.js';
 
 export interface MemoryCommandOptions {
   configManager: ConfigManager;
@@ -34,6 +34,11 @@ export async function handleMemoryCommand(args: string[], options: MemoryCommand
 
   if (action === 'stats' || action === 'status') {
     await printStats(store, options, language);
+    return;
+  }
+
+  if (action === 'review') {
+    await reviewMemories(store, args.slice(1), language);
     return;
   }
 
@@ -148,9 +153,91 @@ async function printStats(store: MemoryStore, options: MemoryCommandOptions, lan
   console.log(chalk.bold(language === 'zh-CN' ? zh('statsTitle') : 'Memory statistics'));
   console.log(`  ${language === 'zh-CN' ? zh('autoStatus') : 'Auto memory'}: ${enabled}`);
   console.log(`  total=${stats.total} / global=${stats.global} / project=${stats.project} / manual=${stats.manual} / auto=${stats.auto}`);
+  console.log(`  pending=${stats.pending}`);
   console.log(`  ${language === 'zh-CN' ? zh('typeDistribution') : 'Type distribution'}: ${typeSummary || 'empty'}`);
   if (stats.latestAge) console.log(`  ${language === 'zh-CN' ? zh('latestMemory') : 'Latest memory'}: ${stats.latestAge}`);
   console.log(chalk.dim(`  ${language === 'zh-CN' ? zh('claudeReference') : 'Claude Code reference'}: status/doctor style visibility for memory health.`));
+  console.log('');
+}
+
+async function reviewMemories(store: MemoryStore, args: string[], language: Lang): Promise<void> {
+  const action = args[0]?.toLowerCase();
+  if (!action || action === 'list') {
+    renderPendingMemories(await store.listPending(), language);
+    return;
+  }
+
+  if (['approve', 'accept', 'save'].includes(action)) {
+    const id = args[1];
+    if (!id) {
+      console.log(chalk.red(`  ${language === 'zh-CN' ? zh('missingPendingId') : 'Please provide a pending memory id or all.'}`));
+      return;
+    }
+    if (id === 'all') {
+      const pending = await store.listPending();
+      let saved = 0;
+      for (const record of pending) {
+        const result = await store.approvePending(record.id);
+        if (result?.result.created) saved++;
+      }
+      console.log(chalk.green(`  ${language === 'zh-CN' ? zh('reviewApproved') : 'Approved'}: ${saved}/${pending.length}`));
+      return;
+    }
+    const result = await store.approvePending(id);
+    if (!result) {
+      console.log(chalk.yellow(`  ${language === 'zh-CN' ? zh('pendingNotFound') : 'Pending memory not found'}: ${id}`));
+      return;
+    }
+    const label = result.result.created
+      ? (language === 'zh-CN' ? zh('remembered') : 'Remembered')
+      : (language === 'zh-CN' ? zh('duplicate') : 'Memory already exists');
+    console.log(chalk.green(`  ${label}: ${result.result.record.id}`));
+    console.log(chalk.dim(`  ${result.result.record.scope}/${result.result.record.type}: ${result.result.record.content}`));
+    return;
+  }
+
+  if (['reject', 'drop', 'discard'].includes(action)) {
+    const id = args[1];
+    if (!id) {
+      console.log(chalk.red(`  ${language === 'zh-CN' ? zh('missingPendingId') : 'Please provide a pending memory id or all.'}`));
+      return;
+    }
+    if (id === 'all') {
+      const count = await store.clearPending();
+      console.log(chalk.yellow(`  ${language === 'zh-CN' ? zh('reviewRejected') : 'Rejected'}: ${count}`));
+      return;
+    }
+    const rejected = await store.rejectPending(id, 'manual reject');
+    console.log(rejected
+      ? chalk.yellow(`  ${language === 'zh-CN' ? zh('reviewRejected') : 'Rejected'}: ${rejected.id}`)
+      : chalk.yellow(`  ${language === 'zh-CN' ? zh('pendingNotFound') : 'Pending memory not found'}: ${id}`));
+    return;
+  }
+
+  console.log(chalk.dim(language === 'zh-CN'
+    ? '/memory review [list|approve <id|all>|reject <id|all>]'
+    : '/memory review [list|approve <id|all>|reject <id|all>]'));
+}
+
+function renderPendingMemories(records: PendingMemoryRecord[], language: Lang): void {
+  console.log('');
+  console.log(chalk.bold(language === 'zh-CN' ? zh('reviewTitle') : 'Pending memory review'));
+  if (records.length === 0) {
+    console.log(chalk.dim(`  ${language === 'zh-CN' ? zh('reviewEmpty') : 'No pending automatic memories.'}`));
+    console.log(chalk.dim(`  ${language === 'zh-CN' ? zh('reviewHint') : 'Automatic memories are queued here before they are saved.'}`));
+    console.log('');
+    return;
+  }
+  for (const record of records) {
+    console.log(`  ${chalk.cyan(record.id)} ${chalk.dim(`${record.candidate.scope}/${record.candidate.type}/${record.reason}`)}`);
+    console.log(`    ${record.candidate.content}`);
+    if (record.policy?.severity === 'warn') {
+      for (const reason of record.policy.reasons) console.log(chalk.dim(`    warning: ${reason}`));
+    }
+  }
+  console.log(chalk.dim(language === 'zh-CN'
+    ? '  \u786e\u8ba4\uff1a/memory review approve <id> \u6216 all\uff1b\u4e22\u5f03\uff1a/memory review reject <id> \u6216 all\u3002'
+    : '  Approve with /memory review approve <id|all>; discard with /memory review reject <id|all>.'));
   console.log('');
 }
 
@@ -324,7 +411,7 @@ function printUsage(language: Lang): void {
   if (language === 'zh-CN') {
     console.log(chalk.dim(`  ${zh('usage')}`));
   } else {
-    console.log(chalk.dim('  Usage: /memory [list|stats|types|policy|paths] | /memory add <type> [--scope global|project] [--tag a,b] <content> | /memory forget <id> | /memory auto [status|on|off]'));
+    console.log(chalk.dim('  Usage: /memory [list|stats|types|policy|paths|review] | /memory add <type> [--scope global|project] [--tag a,b] <content> | /memory forget <id> | /memory auto [status|on|off]'));
   }
 }
 
@@ -349,6 +436,14 @@ type ZhKey =
   | 'typeDistribution'
   | 'latestMemory'
   | 'claudeReference'
+  | 'reviewTitle'
+  | 'reviewEmpty'
+  | 'reviewHint'
+  | 'reviewApproved'
+  | 'reviewRejected'
+  | 'remembered'
+  | 'missingPendingId'
+  | 'pendingNotFound'
   | 'missingId'
   | 'forgot'
   | 'notFound'
@@ -378,11 +473,19 @@ type ZhKey =
   | ErrorKey;
 
 const ZH: Record<ZhKey, string> = {
-  usage: '/memory [list|stats|types|policy|paths] | /memory add <type> [--scope global|project] [--tag a,b] <content> | /memory forget <id> | /memory auto [status|on|off]',
+  usage: '/memory [list|stats|types|policy|paths|review] | /memory add <type> [--scope global|project] [--tag a,b] <content> | /memory forget <id> | /memory auto [status|on|off]',
   statsTitle: 'RoxyCode \u8bb0\u5fc6\u7edf\u8ba1',
   typeDistribution: '\u7c7b\u578b\u5206\u5e03',
   latestMemory: '\u6700\u8fd1\u8bb0\u5fc6',
   claudeReference: '\u5bf9\u7167 Claude Code',
+  reviewTitle: '\u81ea\u52a8\u8bb0\u5fc6\u5f85\u786e\u8ba4',
+  reviewEmpty: '\u6ca1\u6709\u5f85\u786e\u8ba4\u7684\u81ea\u52a8\u8bb0\u5fc6\u3002',
+  reviewHint: '\u81ea\u52a8\u8bb0\u5fc6\u4f1a\u5148\u8fdb\u5165\u8fd9\u91cc\uff0c\u53ea\u6709\u4f60\u786e\u8ba4\u540e\u624d\u4f1a\u5199\u5165\u957f\u671f\u8bb0\u5fc6\u3002',
+  reviewApproved: '\u5df2\u786e\u8ba4',
+  reviewRejected: '\u5df2\u4e22\u5f03',
+  remembered: '\u5df2\u8bb0\u4f4f',
+  missingPendingId: '\u8bf7\u63d0\u4f9b\u5f85\u786e\u8ba4\u8bb0\u5fc6 ID \u6216 all\u3002',
+  pendingNotFound: '\u672a\u627e\u5230\u5f85\u786e\u8ba4\u8bb0\u5fc6',
   missingId: '\u8bf7\u63d0\u4f9b\u8bb0\u5fc6 ID\u3002',
   forgot: '\u5df2\u5fd8\u8bb0',
   notFound: '\u672a\u627e\u5230',

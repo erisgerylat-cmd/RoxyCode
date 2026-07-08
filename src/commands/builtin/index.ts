@@ -134,8 +134,8 @@ export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): Co
       category: 'context',
       source: 'builtin',
       type: 'local',
-      usage: '/memory [list|stats|types|policy|paths|add|forget|auto]',
-      examples: ['/memory', '/memory stats', '/memory types', '/memory policy', '/memory auto off', '/memory add learning explain TypeScript with examples', '/memory add workflow --scope project run pnpm build before final'],
+      usage: '/memory [list|stats|types|policy|paths|review|add|forget|auto]',
+      examples: ['/memory', '/memory stats', '/memory review', '/memory review approve all', '/memory types', '/memory policy', '/memory auto off', '/memory add learning explain TypeScript with examples'],
       subcommands: [
         { name: 'list', description: isZh ? zh('memoryList') : 'List memories' },
         { name: 'stats', description: isZh ? zh('memoryStats') : 'Show memory statistics' },
@@ -143,6 +143,7 @@ export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): Co
         { name: 'forget', description: isZh ? zh('memoryForget') : 'Archive a memory', needsInput: true },
         { name: 'types', description: isZh ? zh('memoryTypes') : 'Show memory types' },
         { name: 'policy', description: isZh ? zh('memoryPolicy') : 'Show what should and should not be remembered' },
+        { name: 'review', description: isZh ? zh('memoryReview') : 'Review pending automatic memory candidates' },
         { name: 'auto', description: isZh ? zh('memoryAuto') : 'Toggle automatic memory extraction', needsInput: true },
         { name: 'paths', description: isZh ? zh('memoryPaths') : 'Show memory file paths' },
       ],
@@ -1195,6 +1196,7 @@ type ZhKey =
   | 'memoryForget'
   | 'memoryTypes'
   | 'memoryPolicy'
+  | 'memoryReview'
   | 'memoryAuto'
   | 'memoryPaths'
   | 'workflowDescription'
@@ -1262,6 +1264,7 @@ const ZH: Record<ZhKey, string> = {
   memoryForget: '\u5f52\u6863\u4e00\u6761\u8bb0\u5fc6',
   memoryTypes: '\u663e\u793a\u8bb0\u5fc6\u7c7b\u578b',
   memoryPolicy: '\u67e5\u770b\u8bb0\u5fc6\u4fdd\u5b58\u8fb9\u754c',
+  memoryReview: '\u786e\u8ba4\u6216\u4e22\u5f03\u81ea\u52a8\u8bb0\u5fc6\u5019\u9009',
   memoryAuto: '\u5207\u6362\u81ea\u52a8\u8bb0\u5fc6\u63d0\u53d6',
   memoryPaths: '\u663e\u793a\u8bb0\u5fc6\u6587\u4ef6\u8def\u5f84',
   workflowDescription: '\u8fd0\u884c RoxyCode \u4e2d\u6587\u4e1a\u52a1\u5de5\u4f5c\u6d41',
