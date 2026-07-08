@@ -4,6 +4,7 @@ import type { CharacterManager } from '../../aesthetic/character/CharacterManage
 import type { ConfigManager } from '../../core/ConfigManager.js';
 import type { LLMProvider } from '../../core/types/llm.js';
 import type { Language } from '../../i18n/index.js';
+import type { CodeDiagnosticsReport, CodeDiagnosticsRunner } from '../../lsp/index.js';
 import type { ContextManager } from '../../session/context/ContextManager.js';
 import type { RuntimeStateSnapshot } from '../../runtime/index.js';
 import type { MemoryStats } from '../../session/memory/index.js';
@@ -29,6 +30,7 @@ export interface DiagnosticsCommandOptions {
   getCommandCount: () => number;
   getTools?: () => Tool[];
   getSessionInfo?: () => { sessionId: string; path: string };
+  runCodeDiagnostics?: CodeDiagnosticsRunner;
 }
 
 export async function renderDiagnosticsCommand(options: DiagnosticsCommandOptions): Promise<void> {
@@ -42,6 +44,7 @@ export async function renderDiagnosticsCommand(options: DiagnosticsCommandOption
   checks.push(...diagnoseConfig(options));
   checks.push(...diagnoseModel(options, runtime));
   checks.push(...diagnoseWorkspaceExecution(options, runtime));
+  checks.push(...await diagnoseCodeDiagnostics(options, isZh));
   checks.push(...diagnoseToolResultPairing(runtime, isZh));
   checks.push(...diagnoseToolScheduling(options));
   checks.push(...diagnoseQueryProfile(runtime, isZh));
@@ -87,6 +90,64 @@ export async function renderDiagnosticsCommand(options: DiagnosticsCommandOption
   void config;
 }
 
+async function diagnoseCodeDiagnostics(options: DiagnosticsCommandOptions, isZh: boolean): Promise<DiagnosticCheck[]> {
+  if (!options.runCodeDiagnostics) return [];
+  let report: CodeDiagnosticsReport;
+  try {
+    report = await options.runCodeDiagnostics({ cwd: process.cwd(), maxDiagnostics: 20 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return [{
+      severity: 'warning',
+      title: isZh ? '\u4ee3\u7801\u8bca\u65ad\u8fd0\u884c\u5931\u8d25' : 'Code diagnostics failed to run',
+      detail: message,
+      action: isZh ? '\u786e\u8ba4 TypeScript \u4f9d\u8d56\u3001tsconfig.json \u548c\u672c\u5730\u6587\u4ef6\u6743\u9650\u540e\u91cd\u65b0\u8fd0\u884c /diagnostics\u3002' : 'Check TypeScript dependencies, tsconfig.json, and local file permissions, then rerun /diagnostics.',
+    }];
+  }
+
+  const counts = report.counts;
+  const baseDetail = `engine=${report.engine}, language=${report.language}, files=${report.filesChecked.length}, errors=${counts.error}, warnings=${counts.warning}, info=${counts.info}, hints=${counts.hint}, duration=${report.durationMs}ms`;
+  if (report.status === 'skipped') {
+    return [{
+      severity: 'info',
+      title: isZh ? '\u4ee3\u7801\u8bca\u65ad\u5df2\u8df3\u8fc7' : 'Code diagnostics skipped',
+      detail: report.notes[0] ?? baseDetail,
+      action: isZh ? '\u5f53\u524d\u4ec5\u4f18\u5148\u652f\u6301 TypeScript\uff1bVue\u3001Java \u4f1a\u5728\u540e\u7eed\u8bed\u8a00\u9002\u914d\u4e2d\u63a5\u5165\u3002' : 'TypeScript is supported first; Vue and Java diagnostics are planned next.',
+    }];
+  }
+  if (report.status === 'error') {
+    return [{
+      severity: 'warning',
+      title: isZh ? '\u4ee3\u7801\u8bca\u65ad\u4e0d\u53ef\u7528' : 'Code diagnostics unavailable',
+      detail: `${baseDetail}; ${report.error ?? 'unknown error'}`,
+      action: isZh ? '\u5148\u4fee\u590d\u8bca\u65ad\u6267\u884c\u73af\u5883\uff0c\u518d\u8ba9 Agent \u7ee7\u7eed\u4fee\u6539\u4ee3\u7801\uff1b\u5426\u5219\u9a8c\u8bc1\u95ed\u73af\u4f1a\u7f3a\u5c11\u7c7b\u578b\u53cd\u9988\u3002' : 'Fix the diagnostics runtime before continuing code edits, otherwise the feedback loop lacks type feedback.',
+    }];
+  }
+
+  const checks: DiagnosticCheck[] = [{
+    severity: report.status === 'passed' ? 'pass' : counts.error > 0 ? 'critical' : 'warning',
+    title: report.status === 'passed' ? (isZh ? '\u4ee3\u7801\u8bca\u65ad\u901a\u8fc7' : 'Code diagnostics passed') : (isZh ? '\u4ee3\u7801\u8bca\u65ad\u4ecd\u6709\u95ee\u9898' : 'Code diagnostics still has issues'),
+    detail: baseDetail,
+    action: report.status === 'passed' ? undefined : (isZh ? '\u4f18\u5148\u4fee\u590d error \u7ea7\u522b\u8bca\u65ad\u540e\u91cd\u65b0\u8fd0\u884c /diagnostics\uff1bAgent \u4fee\u6539 TS \u6587\u4ef6\u540e\u4e5f\u4f1a\u81ea\u52a8\u8bfb\u53d6\u8bca\u65ad\u5e76\u5c1d\u8bd5\u4fee\u590d\u3002' : 'Fix error-level diagnostics first and rerun /diagnostics; after TS edits the Agent also reads diagnostics and attempts a repair pass.'),
+  }];
+
+  if (report.diagnostics.length > 0) {
+    checks.push({
+      severity: 'info',
+      title: isZh ? '\u4ee3\u7801\u8bca\u65ad\u6837\u4f8b' : 'Code diagnostic examples',
+      detail: report.diagnostics.slice(0, 3).map(formatCodeDiagnostic).join(' | '),
+    });
+  }
+  return checks;
+}
+
+function formatCodeDiagnostic(diagnostic: CodeDiagnosticsReport['diagnostics'][number]): string {
+  const location = diagnostic.relativePath
+    ? `${diagnostic.relativePath}${diagnostic.line ? `:${diagnostic.line}${diagnostic.column ? `:${diagnostic.column}` : ''}` : ''}`
+    : '<project>';
+  const code = diagnostic.code === undefined ? '' : ` ${diagnostic.source ?? ''}${diagnostic.code}`;
+  return `${location} [${diagnostic.severity}${code}] ${truncate(diagnostic.message, 140)}`;
+}
 function diagnoseConfig(options: DiagnosticsCommandOptions): DiagnosticCheck[] {
   const isZh = options.language === 'zh-CN';
   const validation = options.configManager.validate();

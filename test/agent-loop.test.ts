@@ -21,6 +21,7 @@ import { ToolRegistry } from '../src/tool/registry/ToolRegistry.js';
 import type { HookRunPayload, HookRunResult, RoxyHookEvent } from '../src/hooks/types.js';
 import type { ContextStatus } from '../src/session/context/ContextManager.js';
 import type { Tool, ToolExecutionContext, ToolInvocation } from '../src/tool/types.js';
+import type { CodeDiagnosticsReport, CodeDiagnosticsRunner } from '../src/lsp/index.js';
 
 const USAGE: LLMUsage = { inputTokens: 3, outputTokens: 5, totalTokens: 8 };
 
@@ -432,6 +433,87 @@ test('economic agent loop executes real edit_file tool with confirmation, backup
   }
 });
 
+test('agent loop injects TypeScript diagnostics into a repair pass after workspace edits', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-agent-diagnostics-'));
+  try {
+    const target = join(cwd, 'src', 'index.ts');
+    const writeCall: ToolCall = {
+      id: 'call-write-ts',
+      name: 'write_file',
+      arguments: { path: 'src/index.ts', content: 'const value: string = 1;\n' },
+    };
+    const editCall: ToolCall = {
+      id: 'call-fix-ts',
+      name: 'edit_file',
+      arguments: { path: 'src/index.ts', old_string: 'const value: string = 1;', new_string: 'const value: string = "1";' },
+    };
+    const provider = new ScriptedProvider([
+      [
+        { type: 'text', text: '我先创建 TypeScript 文件。' },
+        { type: 'tool_call_start', toolCall: writeCall },
+        { type: 'done', usage: USAGE, toolCalls: [writeCall], finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text', text: '初版已写入。' },
+        { type: 'done', usage: USAGE, toolCalls: [], finishReason: 'stop' },
+      ],
+      [
+        { type: 'text', text: '我根据诊断修复类型错误。' },
+        { type: 'tool_call_start', toolCall: editCall },
+        { type: 'done', usage: USAGE, toolCalls: [editCall], finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text', text: '诊断修复完成。' },
+        { type: 'done', usage: USAGE, toolCalls: [], finishReason: 'stop' },
+      ],
+    ]);
+    let diagnosticsCalls = 0;
+    const runCodeDiagnostics: CodeDiagnosticsRunner = async input => {
+      diagnosticsCalls++;
+      return diagnosticsCalls === 1
+        ? diagnosticsReport(input.cwd, 'failed', [{
+            file: target,
+            relativePath: 'src/index.ts',
+            line: 1,
+            column: 7,
+            severity: 'error',
+            source: 'tsc',
+            code: 2322,
+            message: 'Type number is not assignable to type string.',
+          }])
+        : diagnosticsReport(input.cwd, 'passed', []);
+    };
+    const executor = new FakeToolExecutor({
+      success: true,
+      output: '<tool_result name="write_file" status="success">ok</tool_result>',
+      duration: 1,
+      metadata: { path: target, operation: 'update', diff: { addedLines: 1, removedLines: 1 } },
+    });
+    const loop = createLoop({ cwd, provider, executor, runCodeDiagnostics });
+
+    const events = [];
+    for await (const event of loop.run({ userInput: '创建一个 TypeScript 文件。', history: [], mode: 'economic' })) events.push(event);
+
+    const diagnosticEvents = events.filter(event => event.type === 'diagnostics_result');
+    assert.equal(diagnosticEvents.length, 2);
+    assert.equal(diagnosticEvents[0].type, 'diagnostics_result');
+    assert.equal(diagnosticEvents[0].report.status, 'failed');
+    assert.match(diagnosticEvents[0].repairPrompt ?? '', /2322|RoxyCode/);
+    assert.equal(diagnosticEvents[1].type, 'diagnostics_result');
+    assert.equal(diagnosticEvents[1].report.status, 'passed');
+    assert.equal(diagnosticsCalls, 2);
+    assert.equal(provider.streamCalls.length, 4);
+    assert.match(JSON.stringify(provider.streamCalls[2].messages), /2322|RoxyCode/);
+
+    const finalAssistant = events.filter(event => event.type === 'assistant_message').at(-1);
+    assert.ok(finalAssistant && finalAssistant.type === 'assistant_message');
+    assert.match(finalAssistant.text, /\u4ee3\u7801\u8bca\u65ad/);
+    assert.match(finalAssistant.text, /\u9a8c\u8bc1\u901a\u8fc7/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test('plan mode exposes only read-only tools and blocks write execution', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'roxy-agent-plan-mode-'));
   try {
@@ -512,6 +594,7 @@ function createLoop(options: {
   runtimeTools?: Tool[];
   confirm?: AgentLoopOptions['confirm'];
   confirmSecond?: AgentLoopOptions['confirmSecond'];
+  runCodeDiagnostics?: CodeDiagnosticsRunner;
 }): AgentLoop {
   const config: RoxyCodeConfig = structuredClone(DEFAULT_CONFIG);
   config.context.enableCompression = false;
@@ -531,7 +614,26 @@ function createLoop(options: {
     confirm: options.confirm,
     confirmSecond: options.confirmSecond,
     hooks: options.hooks,
+    runCodeDiagnostics: options.runCodeDiagnostics,
   });
+}
+
+function diagnosticsReport(cwd: string, status: 'passed' | 'failed', diagnostics: CodeDiagnosticsReport['diagnostics']): CodeDiagnosticsReport {
+  return {
+    status,
+    engine: 'typescript-compiler',
+    language: 'typescript',
+    cwd,
+    filesChecked: ['src/index.ts'],
+    diagnostics,
+    counts: diagnostics.reduce<CodeDiagnosticsReport['counts']>((acc, diagnostic) => {
+      acc[diagnostic.severity] += 1;
+      return acc;
+    }, { error: 0, warning: 0, info: 0, hint: 0 }),
+    durationMs: 3,
+    generatedAt: new Date().toISOString(),
+    notes: ['test diagnostics'],
+  };
 }
 
 const fakeTool: Tool = {

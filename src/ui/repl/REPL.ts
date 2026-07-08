@@ -41,6 +41,7 @@ import type { CommandDefinition } from '../../commands/CommandRegistry.js';
 import { createRuntimeState, type QueryProfileSummary, type RuntimeExtensionSnapshot, type RuntimeState } from '../../runtime/index.js';
 import { formatErrorForDisplay, getRoxyErrorDescriptor, toError } from '../../core/errors.js';
 import { TelemetryLogger } from '../../telemetry/index.js';
+import { runCodeDiagnostics } from '../../lsp/index.js';
 
 export interface REPLOptions {
   characterManager: CharacterManager;
@@ -203,6 +204,7 @@ export class REPL {
       getTools: () => this.toolRegistry.list(),
       getRuntimeSnapshot: () => this.runtimeState.snapshot(),
       getMemoryStats: () => this.memoryStore.getStats({ enabled: this.configManager.get('memory.auto') !== false, language: this.getLanguage() }),
+      runCodeDiagnostics: input => runCodeDiagnostics({ ...input, cwd: input.cwd || process.cwd() }),
       showHelp: () => this.showHelp(),
       showCommandHelp: name => this.showCommandHelp(name),
       showHistory: () => this.showHistory(),
@@ -619,6 +621,7 @@ export class REPL {
       hooks: this.hookManager,
       telemetry: this.telemetryLogger,
       todoStore: this.todoStore,
+      runCodeDiagnostics: input => runCodeDiagnostics({ ...input, cwd: input.cwd || process.cwd() }),
     });
   }
 
@@ -987,6 +990,19 @@ export class REPL {
         attributes.summary = event.summary;
         attributes.hasRecoverySuggestion = Boolean(event.recoverySuggestion);
         break;
+      case 'diagnostics_result':
+        name = 'runtime.code_diagnostics';
+        category = 'runtime';
+        success = event.report.status === 'passed';
+        attributes.status = event.report.status;
+        attributes.engine = event.report.engine;
+        attributes.language = event.report.language;
+        attributes.filesChecked = event.report.filesChecked.length;
+        attributes.errorCount = event.report.counts.error;
+        attributes.warningCount = event.report.counts.warning;
+        attributes.durationMs = event.report.durationMs;
+        attributes.hasRepairPrompt = Boolean(event.repairPrompt);
+        break;
       case 'context_compacted':
         name = 'runtime.context_compacted';
         category = 'runtime';
@@ -1134,6 +1150,18 @@ export class REPL {
           console.log(chalk.yellow(`  ${zh ? '\u6062\u590d\u5efa\u8bae' : 'Recovery'}: ${event.recoverySuggestion}`));
         }
         break;
+      case 'diagnostics_result': {
+        this.clearStatusBar();
+        const color = event.report.status === 'passed' ? success : event.report.status === 'failed' ? chalk.yellow : dim;
+        console.log(color(`  ${zh ? '\u4ee3\u7801\u8bca\u65ad' : 'Code diagnostics'}: ${event.summary}`));
+        for (const diagnostic of event.report.diagnostics.slice(0, 3)) {
+          console.log(dim(`    - ${formatCodeDiagnosticForDisplay(diagnostic)}`));
+        }
+        if (event.repairPrompt) {
+          console.log(chalk.yellow(`  ${zh ? '\u4fee\u590d\u63d0\u793a' : 'Repair'}: ${zh ? '\u5df2\u5c06\u8bca\u65ad\u6ce8\u5165\u4e0b\u4e00\u8f6e\u4fee\u590d' : 'Diagnostics were injected into the next repair pass.'}`));
+        }
+        break;
+      }
       case 'verification':
         this.clearStatusBar();
         console.log(accent(`\n  ${zh ? zhText('verification') : 'Verification'}`));
@@ -1247,6 +1275,21 @@ export class REPL {
         break;
       case 'tool_result_summary':
         await this.sessionStore.append({ type: 'note', note: 'tool result summary', metadata: { tool: event.toolCall.name, success: event.success, summary: event.summary, recoverySuggestion: event.recoverySuggestion } });
+        break;
+      case 'diagnostics_result':
+        await this.sessionStore.append({
+          type: 'note',
+          note: 'code diagnostics result',
+          metadata: {
+            status: event.report.status,
+            engine: event.report.engine,
+            language: event.report.language,
+            counts: event.report.counts,
+            filesChecked: event.report.filesChecked.length,
+            durationMs: event.report.durationMs,
+            hasRepairPrompt: Boolean(event.repairPrompt),
+          },
+        });
         break;
       case 'context_compacted':
         await this.sessionStore.append({ type: 'note', note: 'context compacted', metadata: { layer: event.layer, beforeTokens: event.beforeTokens, afterTokens: event.afterTokens } });
@@ -1730,6 +1773,17 @@ function sanitizeSessionMetadata(value: Record<string, unknown>): Record<string,
 }
 
 
+function formatCodeDiagnosticForDisplay(diagnostic: { relativePath?: string; line?: number; column?: number; severity: string; source?: string; code?: string | number; message: string }): string {
+  const location = diagnostic.relativePath
+    ? diagnostic.relativePath + (diagnostic.line ? ':' + diagnostic.line + (diagnostic.column ? ':' + diagnostic.column : '') : '')
+    : '<project>';
+  const code = diagnostic.code === undefined ? '' : ' ' + (diagnostic.source ?? '') + diagnostic.code;
+  return location + ' [' + diagnostic.severity + code + '] ' + truncateForDisplay(diagnostic.message, 150);
+}
+
+function truncateForDisplay(value: string, max: number): string {
+  return value.length > max ? value.slice(0, max - 3) + '...' : value;
+}
 function indentBlock(text: string): string {
   return text.split('\n').map(line => `  ${line}`).join('\n');
 }

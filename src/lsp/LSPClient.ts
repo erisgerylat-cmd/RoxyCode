@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { LspClientOptions, LspDiagnostic, LspInitializeResult } from './types.js';
 
@@ -44,8 +45,24 @@ export class LSPClient {
 
     const result = await this.request<LspInitializeResult>('initialize', {
       processId: process.pid,
+      rootPath: this.options.cwd,
       rootUri: this.options.rootUri ?? pathToFileURL(this.options.cwd).toString(),
-      capabilities: {},
+      workspaceFolders: [{
+        uri: this.options.rootUri ?? pathToFileURL(this.options.cwd).toString(),
+        name: basename(this.options.cwd),
+      }],
+      capabilities: {
+        workspace: {
+          configuration: true,
+          workspaceFolders: true,
+        },
+        textDocument: {
+          publishDiagnostics: {
+            relatedInformation: true,
+            versionSupport: false,
+          },
+        },
+      },
       initializationOptions: this.options.initializationOptions ?? {},
     });
     this.notify('initialized', {});
@@ -154,6 +171,11 @@ export class LSPClient {
   }
 
   private handleMessage(message: JsonRpcMessage): void {
+    if (typeof message.id === 'number' && typeof message.method === 'string') {
+      this.handleServerRequest(message);
+      return;
+    }
+
     if (typeof message.id === 'number') {
       const pending = this.pending.get(message.id);
       if (!pending) return;
@@ -170,6 +192,15 @@ export class LSPClient {
       this.diagnosticWaiters.delete(message.params.uri);
       for (const waiter of waiters) waiter(message.params.diagnostics);
     }
+  }
+
+  private handleServerRequest(message: JsonRpcMessage): void {
+    let result: unknown = null;
+    if (message.method === 'workspace/configuration') {
+      const items = readWorkspaceConfigurationItems(message.params);
+      result = items.map(() => null);
+    }
+    this.send({ jsonrpc: '2.0', id: message.id, result });
   }
 
   private rejectAll(error: Error): void {
@@ -200,4 +231,10 @@ function isPublishDiagnosticsParams(value: unknown): value is { uri: string; dia
     && value !== null
     && typeof (value as { uri?: unknown }).uri === 'string'
     && Array.isArray((value as { diagnostics?: unknown }).diagnostics);
+}
+
+function readWorkspaceConfigurationItems(value: unknown): unknown[] {
+  if (!value || typeof value !== 'object') return [];
+  const items = (value as { items?: unknown }).items;
+  return Array.isArray(items) ? items : [];
 }

@@ -30,6 +30,7 @@ import { formatQueryProfile, type RuntimeStateSnapshot } from '../../runtime/ind
 import { redactConfigValue } from '../../core/configSchema.js';
 import type { MemoryStats } from '../../session/memory/index.js';
 import type { Tool } from '../../tool/index.js';
+import type { CodeDiagnosticsRunner } from '../../lsp/index.js';
 
 export interface BuiltinCommandFactoryOptions {
   text: I18nText['commands'];
@@ -51,6 +52,7 @@ export interface BuiltinCommandFactoryOptions {
   getTools?: () => Tool[];
   getRuntimeSnapshot?: () => RuntimeStateSnapshot;
   getMemoryStats?: () => Promise<MemoryStats>;
+  runCodeDiagnostics?: CodeDiagnosticsRunner;
   showHelp: () => void;
   showCommandHelp: (cmdName: string) => void;
   showHistory: () => void;

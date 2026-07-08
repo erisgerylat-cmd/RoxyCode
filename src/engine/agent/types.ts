@@ -10,6 +10,7 @@ import type { MultiAgentEvent } from '../multi-agent/index.js';
 import type { QueryProfileSummary } from '../../runtime/index.js';
 import type { TodoStore } from '../../tool/builtin/todoWrite.js';
 import type { AgentPhase } from './ToolResultSummarizer.js';
+import type { CodeDiagnosticsReport, CodeDiagnosticsRunner } from '../../lsp/index.js';
 
 export type AgentLoopMode = 'lite' | 'economic' | 'standard' | 'ultimate' | 'plan';
 
@@ -29,6 +30,7 @@ export type AgentLoopEvent =
   | { type: 'tool_progress'; toolCall: ToolCall; progress: ToolProgressEvent }
   | { type: 'tool_result'; toolCall: ToolCall; result: ToolResult }
   | { type: 'tool_result_summary'; toolCall: ToolCall; summary: string; success: boolean; recoverySuggestion?: string }
+  | { type: 'diagnostics_result'; report: CodeDiagnosticsReport; summary: string; repairPrompt?: string }
   | { type: 'verification'; text: string }
   | { type: 'context_compacted'; layer: string; beforeTokens: number; afterTokens: number }
   | { type: 'token_budget_continue'; continuationCount: number; pct: number; turnTokens: number; budget: number }
@@ -55,6 +57,7 @@ export interface AgentLoopOptions {
   hooks?: HookRunner;
   telemetry?: TelemetryLogger;
   todoStore?: TodoStore;
+  runCodeDiagnostics?: CodeDiagnosticsRunner;
   signal?: AbortSignal;
 }
 

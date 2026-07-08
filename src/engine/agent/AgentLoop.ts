@@ -18,6 +18,12 @@ import { QueryProfiler, type QueryProfileSummary } from '../../runtime/index.js'
 import { StreamingToolExecutor } from './StreamingToolExecutor.js';
 import { createFileReadState } from '../../tool/security/FileReadState.js';
 import { TodoStore } from '../../tool/builtin/todoWrite.js';
+import {
+  isTypeScriptDiagnosticPath,
+  renderCodeDiagnosticsForPrompt,
+  renderCodeDiagnosticsSummary,
+  type CodeDiagnosticsReport,
+} from '../../lsp/index.js';
 import type { Tool, ToolDefinition, ToolPermissionMode } from '../../tool/index.js';
 import { loadCharacterPromptContext } from '../../aesthetic/character/CharacterPromptLoader.js';
 import { ProfileManager } from '../../session/profile/ProfileManager.js';
@@ -30,6 +36,16 @@ import {
 } from './ToolResultSummarizer.js';
 
 const ZERO_USAGE: LLMUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+interface ToolLoopResult {
+  messages: Message[];
+  usage: LLMUsage;
+  workspaceChanges: WorkspaceChange[];
+}
+
+interface DiagnosticsRepairResult extends ToolLoopResult {
+  report: CodeDiagnosticsReport | null;
+}
+
 interface WorkspaceChange {
   toolName: 'write_file' | 'edit_file';
   path: string;
@@ -107,6 +123,8 @@ export class AgentLoop {
       let messages = this.buildInitialMessages(input.history, userInput, input.mode, runtimeContext, hookContext || null, userProfile);
       profiler.mark('query_setup_end');
       let totalUsage = { ...ZERO_USAGE };
+      let workspaceChanges: WorkspaceChange[] = [];
+      let lastDiagnosticsReport: CodeDiagnosticsReport | null = null;
 
       if (spec.parallelAgents > 1) {
         const runtime = new MultiAgentRuntime({
@@ -164,6 +182,12 @@ export class AgentLoop {
         const loopResult = yield* this.runToolLoop(messages, spec.maxIterations, input.mode, spec.toolPermissionMode ?? 'strict', tokenBudget, budgetTracker, totalUsage, profiler, pairingRepairs, onToolResultPairingRepair);
         messages = loopResult.messages;
         totalUsage = addUsage(totalUsage, loopResult.usage);
+        workspaceChanges = loopResult.workspaceChanges;
+        const diagnosticsResult = yield* this.runDiagnosticsRepairPass(messages, workspaceChanges, input.mode, spec.toolPermissionMode ?? 'strict', totalUsage, profiler, pairingRepairs, onToolResultPairingRepair);
+        messages = diagnosticsResult.messages;
+        totalUsage = addUsage(totalUsage, diagnosticsResult.usage);
+        workspaceChanges = diagnosticsResult.workspaceChanges;
+        lastDiagnosticsReport = diagnosticsResult.report;
       } else {
         yield this.phaseEvent('summarize');
         const liteResult = yield* this.runLiteLoop(messages, tokenBudget, budgetTracker, totalUsage, profiler, pairingRepairs, onToolResultPairingRepair);
@@ -188,6 +212,13 @@ export class AgentLoop {
         totalUsage = addUsage(totalUsage, verification.usage);
         messages = [...messages, assistantMessage(verification.text)];
         yield { type: 'verification', text: verification.text };
+      }
+
+      if (lastDiagnosticsReport) {
+        const diagnosticsSummary = renderAgentDiagnosticsFinalSummary(lastDiagnosticsReport, this.options.language);
+        messages = [...messages, assistantMessage(diagnosticsSummary)];
+        yield { type: 'text_delta', text: `\n${diagnosticsSummary}\n` };
+        yield { type: 'assistant_message', text: diagnosticsSummary };
       }
 
       const responseText = extractAssistantText(messages);
@@ -333,7 +364,7 @@ export class AgentLoop {
     profiler: QueryProfiler,
     pairingRepairs: LLMToolResultPairingRepair[],
     onToolResultPairingRepair: (report: LLMToolResultPairingRepair) => void,
-  ): AsyncIterable<AgentLoopEvent, { messages: Message[]; usage: LLMUsage }> {
+  ): AsyncIterable<AgentLoopEvent, ToolLoopResult> {
     let messages = initialMessages;
     let totalUsage = { ...ZERO_USAGE };
     let toolIterations = 0;
@@ -425,7 +456,7 @@ export class AgentLoop {
         }
 
         if (decision.completionEvent) yield { type: 'token_budget_done', ...decision.completionEvent };
-        return { messages, usage: totalUsage };
+        return { messages, usage: totalUsage, workspaceChanges };
       }
 
       if (toolIterations >= maxIterations) {
@@ -495,9 +526,69 @@ export class AgentLoop {
     const finalLimitText = appendWorkspaceChangeSummary(limitText, workspaceChanges, this.options.language);
     messages = [...messages, assistantMessage(finalLimitText)];
     yield { type: 'assistant_message', text: finalLimitText };
-    return { messages, usage: totalUsage };
+    return { messages, usage: totalUsage, workspaceChanges };
   }
 
+  private async *runDiagnosticsRepairPass(
+    messages: Message[],
+    workspaceChanges: WorkspaceChange[],
+    mode: AgentRunInput['mode'],
+    permissionMode: ToolPermissionMode,
+    baseUsage: LLMUsage,
+    profiler: QueryProfiler,
+    pairingRepairs: LLMToolResultPairingRepair[],
+    onToolResultPairingRepair: (report: LLMToolResultPairingRepair) => void,
+  ): AsyncIterable<AgentLoopEvent, DiagnosticsRepairResult> {
+    const runner = this.options.runCodeDiagnostics;
+    const changedFiles = collectDiagnosticFiles(workspaceChanges);
+    if (!runner || changedFiles.length === 0) {
+      return { messages, usage: { ...ZERO_USAGE }, workspaceChanges, report: null };
+    }
+
+    yield this.phaseEvent('verify');
+    const firstReport = await runner({ cwd: this.options.cwd, changedFiles, maxDiagnostics: 50 });
+    const firstSummary = renderCodeDiagnosticsSummary(firstReport, this.options.language);
+    const firstRepairPrompt = shouldRepairFromDiagnostics(firstReport)
+      ? renderCodeDiagnosticsForPrompt(firstReport, this.options.language, 8)
+      : undefined;
+    yield { type: 'diagnostics_result', report: firstReport, summary: firstSummary, repairPrompt: firstRepairPrompt };
+
+    if (!firstRepairPrompt || permissionMode === 'read-only') {
+      return { messages, usage: { ...ZERO_USAGE }, workspaceChanges, report: firstReport };
+    }
+
+    const repairInstruction = this.options.language === 'en-US'
+      ? firstRepairPrompt + '\n\nRun only the tools needed to fix these diagnostics, then stop for verification.'
+      : firstRepairPrompt + '\n\n\u8bf7\u53ea\u8c03\u7528\u4fee\u590d\u8fd9\u4e9b\u8bca\u65ad\u6240\u9700\u7684\u5de5\u5177\uff1b\u4fee\u590d\u540e\u505c\u6b62\uff0c\u7b49\u5f85 RoxyCode \u518d\u6b21\u9a8c\u8bc1\u3002';
+    const repairResult = yield* this.runToolLoop(
+      [...messages, userMessage(repairInstruction)],
+      2,
+      mode,
+      permissionMode,
+      null,
+      createBudgetTracker(),
+      baseUsage,
+      profiler,
+      pairingRepairs,
+      onToolResultPairingRepair,
+    );
+    const repairedChanges = [...workspaceChanges, ...repairResult.workspaceChanges];
+    const repairedFiles = collectDiagnosticFiles(repairedChanges);
+    const secondReport = repairedFiles.length > 0
+      ? await runner({ cwd: this.options.cwd, changedFiles: repairedFiles, maxDiagnostics: 50 })
+      : firstReport;
+    yield {
+      type: 'diagnostics_result',
+      report: secondReport,
+      summary: renderCodeDiagnosticsSummary(secondReport, this.options.language),
+    };
+    return {
+      messages: repairResult.messages,
+      usage: repairResult.usage,
+      workspaceChanges: repairedChanges,
+      report: secondReport,
+    };
+  }
   private async prepareContext(messages: Message[], profiler?: QueryProfiler): Promise<{ messages: Message[]; compactionEvent?: AgentLoopEvent }> {
     profiler?.mark('query_context_compaction_start', 'check');
     const before = await this.options.contextManager.getStatus(messages);
@@ -526,6 +617,23 @@ export class AgentLoop {
   }
 }
 
+function collectDiagnosticFiles(changes: WorkspaceChange[]): string[] {
+  return [...new Set(changes.map(change => change.path).filter(isTypeScriptDiagnosticPath))];
+}
+
+function shouldRepairFromDiagnostics(report: CodeDiagnosticsReport): boolean {
+  return report.status === 'failed' && report.counts.error > 0;
+}
+
+function renderAgentDiagnosticsFinalSummary(report: CodeDiagnosticsReport, language: 'zh-CN' | 'en-US'): string {
+  const summary = renderCodeDiagnosticsSummary(report, language);
+  if (language === 'en-US') {
+    const status = report.status === 'passed' ? 'Validation passed' : report.status === 'failed' ? 'Diagnostics remain' : 'Diagnostics unavailable';
+    return ['## Code Diagnostics', '- ' + status + ': ' + summary].join('\n');
+  }
+  const status = report.status === 'passed' ? '\u9a8c\u8bc1\u901a\u8fc7' : report.status === 'failed' ? '\u4ecd\u6709\u8bca\u65ad' : '\u8bca\u65ad\u4e0d\u53ef\u7528';
+  return ['## \u4ee3\u7801\u8bca\u65ad', '- ' + status + '\uff1a' + summary].join('\n');
+}
 function collectWorkspaceChange(toolCall: ToolCall, result: ToolResult): WorkspaceChange | null {
   if (!result.success || (toolCall.name !== 'write_file' && toolCall.name !== 'edit_file')) return null;
   const meta = result.metadata ?? {};

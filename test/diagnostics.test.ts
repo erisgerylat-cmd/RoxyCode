@@ -214,6 +214,56 @@ test('diagnostics keeps generic advice for non-provider runtime errors', async (
   assert.doesNotMatch(output, /ROXY_OPENAI_BASE_URL/);
 });
 
+test('diagnostics includes TypeScript code diagnostics when runner is available', async () => {
+  const output = await captureConsole(async () => {
+    await renderDiagnosticsCommand({
+      language: 'zh-CN',
+      configManager: fakeConfigManager(DEFAULT_CONFIG),
+      contextManager: fakeContextManager(),
+      llmProvider: fakeProvider(),
+      characterManager: fakeCharacterManager(),
+      getCommandCount: () => 12,
+      getRuntimeSnapshot: () => baseRuntime(),
+      getMemoryStats: async () => ({
+        enabled: true,
+        total: 0,
+        manual: 0,
+        auto: 0,
+        global: 0,
+        project: 0,
+        archived: 0,
+        byType: { user: 0, project: 0, feedback: 0, reference: 0, learning: 0, workflow: 0 },
+      }),
+      runCodeDiagnostics: async input => ({
+        status: 'failed',
+        engine: 'typescript-compiler',
+        language: 'typescript',
+        cwd: input.cwd,
+        filesChecked: ['src/index.ts'],
+        diagnostics: [{
+          file: `${input.cwd}/src/index.ts`,
+          relativePath: 'src/index.ts',
+          line: 1,
+          column: 7,
+          severity: 'error',
+          source: 'tsc',
+          code: 2322,
+          message: 'Type number is not assignable to type string.',
+        }],
+        counts: { error: 1, warning: 0, info: 0, hint: 0 },
+        durationMs: 12,
+        generatedAt: new Date().toISOString(),
+        notes: ['test diagnostics'],
+      }),
+    });
+  });
+
+  assert.match(output, /\u4ee3\u7801\u8bca\u65ad\u4ecd\u6709\u95ee\u9898/);
+  assert.match(output, /typescript-compiler/);
+  assert.match(output, /src\/index\.ts:1:7/);
+  assert.match(output, /2322/);
+});
+
 function runtimeWithProviderError(code: string, statusCode: number): RuntimeStateSnapshot {
   return {
     ...baseRuntime(),
