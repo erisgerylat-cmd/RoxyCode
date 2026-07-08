@@ -156,6 +156,26 @@ export function recoveryHint(toolCall: ToolCall, result: ToolResult, language: '
       ? '下一步：修正工具参数；必要时先读取文件或列目录，确认路径和参数格式。'
       : 'Next: fix the tool arguments; read the file or list the directory first if path or shape is uncertain.';
   }
+  if ((toolCall.name === 'write_file' || toolCall.name === 'edit_file') && errorText.includes('existing file has not been read')) {
+    return zh
+      ? '\u4e0b\u4e00\u6b65\uff1a\u5148\u5bf9\u76ee\u6807\u6587\u4ef6\u6267\u884c\u5b8c\u6574 read_file\uff0c\u4e0d\u8981\u5e26 offset/limit\uff1b\u786e\u8ba4\u6700\u65b0\u5185\u5bb9\u540e\u518d\u91cd\u8bd5\u5199\u5165\u6216\u7f16\u8f91\u3002'
+      : 'Next: run a full read_file on the target without offset/limit, confirm the latest content, then retry the write or edit.';
+  }
+  if ((toolCall.name === 'write_file' || toolCall.name === 'edit_file') && errorText.includes('only part of this file was read')) {
+    return zh
+      ? '\u4e0b\u4e00\u6b65\uff1a\u5f53\u524d\u53ea\u6709\u7247\u6bb5\u89c6\u56fe\u3002\u8bf7\u91cd\u65b0 read_file \u8bfb\u53d6\u5b8c\u6574\u6587\u4ef6\uff0c\u518d\u6267\u884c\u5199\u5165\u6216\u7f16\u8f91\u3002'
+      : 'Next: the current view is partial. Reread the full file before writing or editing.';
+  }
+  if ((toolCall.name === 'write_file' || toolCall.name === 'edit_file') && errorText.includes('file has changed since it was read')) {
+    return zh
+      ? '\u4e0b\u4e00\u6b65\uff1a\u6587\u4ef6\u5728\u8bfb\u53d6\u540e\u53d1\u751f\u53d8\u5316\u3002\u8bf7\u91cd\u65b0 read_file \u83b7\u53d6\u6700\u65b0\u7248\u672c\uff0c\u518d\u57fa\u4e8e\u65b0\u5185\u5bb9\u91cd\u8bd5\u3002'
+      : 'Next: the file changed after it was read. Reread the latest version and retry from that content.';
+  }
+  if (toolCall.name === 'edit_file' && (errorText.includes('old_string') || errorText.includes('not found'))) {
+    return zh
+      ? '\u4e0b\u4e00\u6b65\uff1a\u91cd\u65b0 read_file \u8bfb\u53d6\u76ee\u6807\u6587\u4ef6\uff0c\u590d\u5236\u5305\u542b\u7a7a\u767d\u548c\u6362\u884c\u7684\u7cbe\u786e old_string\uff1b\u4e0d\u786e\u5b9a\u4f4d\u7f6e\u65f6\u5148\u7528 grep_search \u5b9a\u4f4d\u5f53\u524d\u6587\u672c\u3002'
+      : 'Next: reread the target file, copy an exact old_string including whitespace and line endings, or use grep_search to locate the current text.';
+  }
   if (errorText.includes('enoent') || errorText.includes('not exist') || errorText.includes('not found') || errorText.includes('不存在')) {
     return zh
       ? '下一步：先用 list_directory 或 grep_search 确认真实路径，再重试。'

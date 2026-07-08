@@ -6,6 +6,7 @@ import {
   userMessage,
   type Message,
   type ToolCall,
+  type ToolResult,
 } from '../../core/types/message.js';
 import { buildAgentSystemPrompt, buildPlanPrompt, buildVerificationPrompt } from './prompts.js';
 import { loadRuntimeContext, renderRuntimeContext } from './RuntimeContext.js';
@@ -29,6 +30,18 @@ import {
 } from './ToolResultSummarizer.js';
 
 const ZERO_USAGE: LLMUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+interface WorkspaceChange {
+  toolName: 'write_file' | 'edit_file';
+  path: string;
+  operation?: string;
+  replaceAll?: boolean;
+  diff?: {
+    addedLines?: number;
+    removedLines?: number;
+    truncated?: boolean;
+  };
+  backups: string[];
+}
 
 export class AgentLoop {
   constructor(private readonly options: AgentLoopOptions) {}
@@ -329,6 +342,7 @@ export class AgentLoop {
     const runtimeTools = filterToolsForPermissionMode(this.options.toolRuntimeTools ?? [], permissionMode);
     const toolDefinitions = filterToolDefinitionsForPermissionMode(this.options.tools, runtimeTools, permissionMode);
     const maxModelCalls = maxIterations + (budget ? 3 : 0);
+    const workspaceChanges: WorkspaceChange[] = [];
 
     for (let modelCall = 0; modelCall < maxModelCalls; modelCall++) {
       const prepared = await this.prepareContext(messages, profiler);
@@ -386,7 +400,16 @@ export class AgentLoop {
       }
 
       if (toolCalls.length === 0) {
-        if (assistantText) yield { type: 'assistant_message', text: assistantText };
+        const finalAssistantText = appendWorkspaceChangeSummary(assistantText, workspaceChanges, this.options.language);
+        if (finalAssistantText !== assistantText) {
+          yield { type: 'text_delta', text: finalAssistantText.slice(assistantText.length) };
+        }
+        if (finalAssistantText) {
+          messages = [...compacted, assistantMessage(finalAssistantText)];
+          yield { type: 'assistant_message', text: finalAssistantText };
+        } else {
+          messages = compacted;
+        }
         const globalUsage = addUsage(baseUsage, totalUsage);
         const decision = checkTokenBudget(budgetTracker, budget, globalUsage.outputTokens, this.options.language);
         if (decision.action === 'continue') {
@@ -460,6 +483,8 @@ export class AgentLoop {
           success: event.result.success,
           recoverySuggestion: presentation.recoverySuggestion,
         };
+        const workspaceChange = collectWorkspaceChange(event.toolCall, event.result);
+        if (workspaceChange) workspaceChanges.push(workspaceChange);
         messages = [...messages, toolResultMessage(event.toolCall, presentation.modelResult)];
       }
     }
@@ -467,8 +492,9 @@ export class AgentLoop {
     const limitText = this.options.language === 'en-US'
       ? `Stopped after ${maxIterations} tool iterations. Please review the latest tool results before continuing.`
       : `\u5df2\u8fbe\u5230 ${maxIterations} \u6b21\u5de5\u5177\u5faa\u73af\u4e0a\u9650\u3002\u8bf7\u5148\u67e5\u770b\u6700\u65b0\u5de5\u5177\u7ed3\u679c\uff0c\u518d\u51b3\u5b9a\u662f\u5426\u7ee7\u7eed\u3002`;
-    messages = [...messages, assistantMessage(limitText)];
-    yield { type: 'assistant_message', text: limitText };
+    const finalLimitText = appendWorkspaceChangeSummary(limitText, workspaceChanges, this.options.language);
+    messages = [...messages, assistantMessage(finalLimitText)];
+    yield { type: 'assistant_message', text: finalLimitText };
     return { messages, usage: totalUsage };
   }
 
@@ -500,6 +526,81 @@ export class AgentLoop {
   }
 }
 
+function collectWorkspaceChange(toolCall: ToolCall, result: ToolResult): WorkspaceChange | null {
+  if (!result.success || (toolCall.name !== 'write_file' && toolCall.name !== 'edit_file')) return null;
+  const meta = result.metadata ?? {};
+  const path = typeof meta.path === 'string' ? meta.path : stringArgFromTool(toolCall, 'path');
+  if (!path) return null;
+  const diff = readDiff(meta.diff);
+  return {
+    toolName: toolCall.name,
+    path,
+    operation: typeof meta.operation === 'string' ? meta.operation : undefined,
+    replaceAll: typeof meta.replaceAll === 'boolean' ? meta.replaceAll : undefined,
+    diff,
+    backups: readBackupPaths(meta.backups),
+  };
+}
+
+function appendWorkspaceChangeSummary(text: string, changes: WorkspaceChange[], language: 'zh-CN' | 'en-US'): string {
+  if (changes.length === 0) return text;
+  const summary = renderWorkspaceChangeSummary(changes, language);
+  if (!text.trim()) return summary;
+  return `${text.trimEnd()}\n\n${summary}`;
+}
+
+function renderWorkspaceChangeSummary(changes: WorkspaceChange[], language: 'zh-CN' | 'en-US'): string {
+  const isZh = language !== 'en-US';
+  const lines = [isZh ? '## \u672c\u8f6e\u5de5\u4f5c\u533a\u53d8\u66f4' : '## Workspace Changes'];
+  for (const change of changes) {
+    const diffText = formatDiffSummary(change.diff, language);
+    const action = change.toolName === 'write_file'
+      ? (change.operation ?? 'write')
+      : (change.replaceAll ? 'edit replace_all' : 'edit');
+    lines.push(`- ${quotePath(change.path)}: ${action}${diffText ? `, ${diffText}` : ''}`);
+    if (change.backups.length > 0) {
+      lines.push(isZh
+        ? `  \u5907\u4efd: ${change.backups.map(quotePath).join(', ')}`
+        : `  Backup: ${change.backups.map(quotePath).join(', ')}`);
+    }
+  }
+  lines.push(isZh
+    ? '\u8fd9\u4e9b\u53d8\u66f4\u5747\u5df2\u901a\u8fc7 RoxyCode \u6743\u9650\u5b88\u536b\u6267\u884c\uff1b\u5df2\u6709\u6587\u4ef6\u5728\u5199\u5165\u524d\u4f1a\u81ea\u52a8\u5907\u4efd\u3002'
+    : 'These changes were executed through the RoxyCode permission guard; existing files are backed up before writes.');
+  return lines.join('\n');
+}
+
+function formatDiffSummary(diff: WorkspaceChange['diff'], language: 'zh-CN' | 'en-US'): string {
+  if (!diff || (diff.addedLines === undefined && diff.removedLines === undefined)) return '';
+  const base = `${language === 'en-US' ? 'diff' : '\u53d8\u66f4'} +${diff.addedLines ?? 0} -${diff.removedLines ?? 0}`;
+  return diff.truncated ? `${base}${language === 'en-US' ? ' (truncated preview)' : '\uff08\u9884\u89c8\u5df2\u622a\u65ad\uff09'}` : base;
+}
+
+function readDiff(value: unknown): WorkspaceChange['diff'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  return {
+    addedLines: typeof record.addedLines === 'number' ? record.addedLines : undefined,
+    removedLines: typeof record.removedLines === 'number' ? record.removedLines : undefined,
+    truncated: typeof record.truncated === 'boolean' ? record.truncated : undefined,
+  };
+}
+
+function readBackupPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => item && typeof item === 'object' ? (item as Record<string, unknown>).backupPath : undefined)
+    .filter((item): item is string => typeof item === 'string' && item.length > 0);
+}
+
+function stringArgFromTool(toolCall: ToolCall, key: string): string | undefined {
+  const value = toolCall.arguments[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function quotePath(value: string): string {
+  return `\`${value}\``;
+}
 function drainPairingRepairs(reports: LLMToolResultPairingRepair[]): AgentLoopEvent[] {
   return reports.splice(0).map(report => ({ type: 'tool_result_pairing_repaired', report }));
 }

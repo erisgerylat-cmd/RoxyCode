@@ -7,6 +7,10 @@ import { test } from 'node:test';
 import { ConfigManager } from '../src/core/ConfigManager.js';
 import { DEFAULT_CONFIG } from '../src/core/types/config.js';
 
+test('default mode uses standard real development flow', () => {
+  assert.equal(DEFAULT_CONFIG.mode, 'standard');
+});
+
 test('local config overrides project config and reports source paths', async () => {
   const env = await createConfigTestEnv();
   try {

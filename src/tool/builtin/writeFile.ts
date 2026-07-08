@@ -22,7 +22,7 @@ export const writeFileTool: Tool = {
     },
   },
   isReadOnly: false,
-  riskLevel: 'high',
+  riskLevel: 'medium',
   concurrency: 'exclusive',
   concurrencySafe: false,
   destructive: true,
@@ -53,10 +53,13 @@ export const writeFileTool: Tool = {
         `path: ${path}`,
         `operation: ${readRecord ? 'update' : 'create'}`,
         `content length: ${content.length}`,
+        ctx.language === 'en-US'
+          ? 'backup: existing files are copied to .roxycode/backups before writing'
+          : 'backup: \u5199\u5165\u524d\u4f1a\u81ea\u52a8\u5907\u4efd\u5df2\u5b58\u5728\u6587\u4ef6\u5230 .roxycode/backups',
         `change: +${diff.addedLines} -${diff.removedLines}`,
         `diff:\n${diff.preview}`,
       ],
-      riskLevel: 'high',
+      riskLevel: 'medium',
     };
   },
   async execute(args, ctx) {

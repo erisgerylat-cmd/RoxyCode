@@ -23,7 +23,7 @@ export const editFileTool: Tool = {
     },
   },
   isReadOnly: false,
-  riskLevel: 'high',
+  riskLevel: 'medium',
   concurrency: 'exclusive',
   concurrencySafe: false,
   destructive: true,
@@ -54,7 +54,9 @@ export const editFileTool: Tool = {
 
     const content = validation.snapshot.content;
     if (!content.includes(oldString)) {
-      return ctx.language === 'en-US' ? 'old_string was not found in the file.' : '\u6587\u4ef6\u4e2d\u672a\u627e\u5230 old_string\u3002';
+      return ctx.language === 'en-US'
+        ? 'old_string was not found in the file. Recovery: run read_file on the full target file, copy an exact snippet including whitespace and line endings, or use grep_search to locate the current text.'
+        : '\u6587\u4ef6\u4e2d\u672a\u627e\u5230 old_string\u3002\u6062\u590d\u5efa\u8bae\uff1a\u5148\u7528 read_file \u5b8c\u6574\u8bfb\u53d6\u76ee\u6807\u6587\u4ef6\uff0c\u590d\u5236\u5305\u542b\u7a7a\u767d\u548c\u6362\u884c\u7684\u7cbe\u786e\u7247\u6bb5\uff0c\u6216\u7528 grep_search \u5b9a\u4f4d\u5f53\u524d\u6587\u672c\u3002';
     }
     const matches = content.split(oldString).length - 1;
     if (matches > 1 && !optionalBooleanArg(args, 'replace_all')) {
@@ -81,10 +83,13 @@ export const editFileTool: Tool = {
         `replace_all: ${replaceAll}`,
         `old length: ${oldString.length}`,
         `new length: ${newString.length}`,
+        ctx.language === 'en-US'
+          ? 'backup: existing files are copied to .roxycode/backups before editing'
+          : 'backup: \u7f16\u8f91\u524d\u4f1a\u81ea\u52a8\u5907\u4efd\u5df2\u5b58\u5728\u6587\u4ef6\u5230 .roxycode/backups',
         `change: +${diff.addedLines} -${diff.removedLines}`,
         `diff:\n${diff.preview}`,
       ],
-      riskLevel: 'high',
+      riskLevel: 'medium',
     };
   },
   async execute(args, ctx) {

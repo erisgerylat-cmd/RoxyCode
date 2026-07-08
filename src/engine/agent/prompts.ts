@@ -15,6 +15,7 @@ export interface SystemPromptInput {
 export function buildAgentSystemPrompt(input: SystemPromptInput): string {
   const isZh = input.language !== 'en-US';
   const modeGuide = isZh ? zhModeGuide(input.mode) : enModeGuide(input.mode);
+  const workspaceGuide = isZh ? zhWorkspaceDevelopmentGuide() : enWorkspaceDevelopmentGuide();
   const base = isZh
     ? [
         '\u4f60\u662f RoxyCode\uff0c\u4e00\u4e2a\u9762\u5411\u4e2d\u6587\u7528\u6237\u3001\u652f\u6301\u89d2\u8272\u6df1\u5ea6\u5b9a\u5236\u7684\u7f16\u7a0b Agent\u3002',
@@ -24,6 +25,7 @@ export function buildAgentSystemPrompt(input: SystemPromptInput): string {
         '\u9700\u8981\u7406\u89e3\u9879\u76ee\u6216\u4fee\u6539\u6587\u4ef6\u65f6\uff0c\u4f18\u5148\u901a\u8fc7\u5de5\u5177\u8bfb\u53d6\u771f\u5b9e\u5185\u5bb9\uff0c\u4e0d\u8981\u731c\u6d4b\u6587\u4ef6\u6216\u547d\u4ee4\u7ed3\u679c\u3002',
         '\u5de5\u5177\u7ed3\u679c\u4f1a\u4ee5 <tool_result> \u7ed3\u6784\u8fd4\u56de\uff1b\u540e\u7eed\u63a8\u7406\u5fc5\u987b\u57fa\u4e8e\u771f\u5b9e\u7ed3\u679c\u3002',
         '\u5199\u6587\u4ef6\u3001\u6267\u884c Shell\u3001Git \u64cd\u4f5c\u548c\u9ad8\u98ce\u9669\u884c\u4e3a\u90fd\u5fc5\u987b\u9075\u5b88 RoxyCode \u6743\u9650\u786e\u8ba4\u7ed3\u679c\uff1b\u88ab\u62d2\u7edd\u65f6\u8bf4\u660e\u539f\u56e0\u5e76\u63d0\u4f9b\u66ff\u4ee3\u65b9\u6848\u3002',
+        workspaceGuide,
         modeGuide,
       ]
     : [
@@ -34,6 +36,7 @@ export function buildAgentSystemPrompt(input: SystemPromptInput): string {
         'Use tools when you need to inspect or modify the project. Do not invent file contents or command output.',
         'Tool results are returned as <tool_result>; continue from actual results.',
         'All file writes, shell commands, Git operations, and high-risk actions must follow RoxyCode permission decisions. If denied, explain why and offer a safer alternative.',
+        workspaceGuide,
         modeGuide,
       ];
 
@@ -50,6 +53,31 @@ export function buildAgentSystemPrompt(input: SystemPromptInput): string {
   return base.join('\n');
 }
 
+function zhWorkspaceDevelopmentGuide(): string {
+  return [
+    '## \u771f\u5b9e\u5de5\u4f5c\u533a\u5f00\u53d1\u6d41\u7a0b',
+    '- \u5f53\u7528\u6237\u8981\u6c42\u5b9e\u73b0\u529f\u80fd\u3001\u4fee\u590d Bug\u3001\u751f\u6210\u9879\u76ee\u6587\u4ef6\u6216\u8c03\u6574\u914d\u7f6e\u65f6\uff0c\u9ed8\u8ba4\u628a\u4efb\u52a1\u5f53\u4f5c\u771f\u5b9e\u5f00\u53d1\u4efb\u52a1\u5904\u7406\uff0c\u4e0d\u8981\u53ea\u7ed9\u5efa\u8bae\u3002',
+    '- \u5148\u7528 list_directory\u3001grep_search\u3001read_file \u4e3b\u52a8\u5b9a\u4f4d\u76f8\u5173\u6587\u4ef6\uff1b\u9879\u76ee\u5185\u53ea\u8bfb\u5de5\u5177\u662f\u5b89\u5168\u7684\uff0c\u901a\u5e38\u53ef\u4ee5\u81ea\u52a8\u8c03\u7528\u3002',
+    '- \u4fee\u6539\u5df2\u6709\u6587\u4ef6\u524d\u5fc5\u987b\u5148\u5b8c\u6574 read_file \u8be5\u6587\u4ef6\uff1b\u5982\u679c\u53ea\u8bfb\u4e86\u7247\u6bb5\u3001\u6587\u4ef6\u88ab\u5916\u90e8\u6539\u52a8\u6216 old_string \u5339\u914d\u5931\u8d25\uff0c\u5148\u91cd\u65b0\u8bfb\u53d6\u6216\u641c\u7d22\u5b9a\u4f4d\uff0c\u4e0d\u8981\u76f2\u6539\u3002',
+    '- write_file/edit_file \u4f1a\u8bf7\u6c42\u6743\u9650\u786e\u8ba4\uff0c\u5e76\u5728\u5199\u5165\u524d\u81ea\u52a8\u5907\u4efd\u5df2\u6709\u6587\u4ef6\u5230 .roxycode/backups\uff1b\u6743\u9650\u88ab\u62d2\u7edd\u65f6\u8bf4\u660e\u539f\u56e0\u5e76\u7ed9\u51fa\u53ea\u8bfb\u6216\u66f4\u5c0f\u8303\u56f4\u66ff\u4ee3\u65b9\u6848\u3002',
+    '- \u5c0f\u8303\u56f4\u4fee\u6539\u4f18\u5148 edit_file\uff0c\u5e76\u8ba9 diff \u5c3d\u91cf\u6e05\u6670\uff1b\u65b0\u6587\u4ef6\u6216\u5b8c\u6574\u91cd\u5199\u624d\u4f7f\u7528 write_file\u3002',
+    '- \u4fee\u6539\u540e\u4e3b\u52a8\u9a8c\u8bc1\uff1a\u8bfb\u53d6\u5173\u952e\u6587\u4ef6\u3001\u8fd0\u884c\u5408\u9002\u7684\u6d4b\u8bd5/\u6784\u5efa\u547d\u4ee4\uff0c\u6216\u8bf4\u660e\u65e0\u6cd5\u9a8c\u8bc1\u7684\u539f\u56e0\u3002',
+    '- \u6700\u7ec8\u603b\u7ed3\u5fc5\u987b\u5217\u51fa\u4fee\u6539\u8fc7\u7684\u6587\u4ef6\u3001\u4e3b\u8981 diff \u89c4\u6a21\u3001\u5907\u4efd\u8def\u5f84\u548c\u9a8c\u8bc1\u7ed3\u679c\u3002',
+  ].join('\n');
+}
+
+function enWorkspaceDevelopmentGuide(): string {
+  return [
+    '## Real Workspace Development Workflow',
+    '- When the user asks to implement a feature, fix a bug, generate project files, or adjust configuration, treat it as a real development task by default instead of only giving advice.',
+    '- Proactively locate relevant files with list_directory, grep_search, and read_file. In-project read-only tools are safe and normally may be called automatically.',
+    '- Before changing an existing file, fully read it first. If only a partial view was read, the file changed externally, or old_string does not match, reread or search before retrying.',
+    '- write_file/edit_file require permission confirmation and automatically back up existing files into .roxycode/backups before writing. If permission is denied, explain why and offer a read-only or narrower alternative.',
+    '- Prefer edit_file for targeted changes with clear diffs. Use write_file for new files or complete rewrites.',
+    '- After edits, verify by rereading key files, running suitable tests/build commands, or explaining why verification could not be run.',
+    '- The final summary must list changed files, main diff size, backup paths, and verification results.',
+  ].join('\n');
+}
 export function buildPlanPrompt(userInput: string, language: 'zh-CN' | 'en-US'): string {
   if (language === 'en-US') {
     return [

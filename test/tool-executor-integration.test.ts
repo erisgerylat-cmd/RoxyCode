@@ -107,7 +107,7 @@ test('tool executor blocks existing file writes until the file has been fully re
   }
 });
 
-test('tool executor asks for high-risk writes after full read, backs up, audits, and records diff metadata', async () => {
+test('tool executor asks for confirmed writes after full read, backs up, audits, and records diff metadata', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'roxy-tool-write-'));
   try {
     await writeFile(join(cwd, 'target.txt'), 'before', 'utf8');
@@ -121,6 +121,8 @@ test('tool executor asks for high-risk writes after full read, backs up, audits,
     let secondConfirmCount = 0;
     ctx.confirm = async prompt => {
       confirmCount += 1;
+      assert.equal(prompt.riskLevel, 'medium');
+      assert.equal(prompt.requiresSecondConfirmation ?? false, false);
       assert.match(prompt.details.join('\n'), /diff:/);
       assert.match(prompt.details.join('\n'), /\+after/);
       return true;
@@ -137,7 +139,7 @@ test('tool executor asks for high-risk writes after full read, backs up, audits,
 
     assert.equal(result.success, true);
     assert.equal(confirmCount, 1);
-    assert.equal(secondConfirmCount, 1);
+    assert.equal(secondConfirmCount, 0);
     assert.equal(await readFile(join(cwd, 'target.txt'), 'utf8'), 'after');
     assert.ok(Array.isArray(result.metadata?.backups));
     assert.equal((result.metadata?.backups as unknown[]).length, 1);

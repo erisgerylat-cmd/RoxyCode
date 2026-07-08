@@ -125,7 +125,7 @@ export const DEFAULT_CONFIG: RoxyCodeConfig = {
     language: 'zh-CN',
     aestheticMode: 'balanced',
   },
-  mode: 'auto',
+  mode: 'standard',
   questioning: { mode: 'smart' },
   cost: { pricingMethod: 'none' },
   mcp: { enabled: true, servers: {}, directories: ['.roxycode'] },

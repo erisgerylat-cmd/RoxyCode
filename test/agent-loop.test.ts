@@ -282,15 +282,15 @@ test('economic agent loop executes real write_file tool with confirmation, backu
       runtimeTools: registry.list(),
       confirm: async prompt => {
         confirmCount++;
-        assert.equal(prompt.riskLevel, 'high');
-        assert.equal(prompt.requiresSecondConfirmation, true);
+        assert.equal(prompt.riskLevel, 'medium');
+        assert.equal(prompt.requiresSecondConfirmation ?? false, false);
         assert.match(prompt.details.join('\n'), /diff:/);
         return true;
       },
       confirmSecond: async prompt => {
         secondConfirmCount++;
-        assert.equal(prompt.riskLevel, 'high');
-        assert.equal(prompt.requiresSecondConfirmation, true);
+        assert.equal(prompt.riskLevel, 'medium');
+        assert.equal(prompt.requiresSecondConfirmation ?? false, false);
         return true;
       },
     });
@@ -299,7 +299,7 @@ test('economic agent loop executes real write_file tool with confirmation, backu
     for await (const event of loop.run({ userInput: 'Overwrite target.txt with new content.', history: [], mode: 'economic' })) events.push(event);
 
     assert.equal(confirmCount, 1);
-    assert.equal(secondConfirmCount, 1);
+    assert.equal(secondConfirmCount, 0);
     assert.equal(await readFile(join(cwd, 'target.txt'), 'utf8'), 'after\n');
 
     const writeResult = events.filter(event => event.type === 'tool_result').at(-1);
@@ -308,6 +308,11 @@ test('economic agent loop executes real write_file tool with confirmation, backu
     assert.match(writeResult.result.output, /write_file/);
     assert.match(writeResult.result.output, /backups/);
     assert.match(writeResult.result.output, /diff:/);
+
+    const finalWriteAssistant = events.filter(event => event.type === 'assistant_message').at(-1);
+    assert.ok(finalWriteAssistant && finalWriteAssistant.type === 'assistant_message');
+    assert.match(finalWriteAssistant.text, /\u672c\u8f6e\u5de5\u4f5c\u533a\u53d8\u66f4/);
+    assert.match(finalWriteAssistant.text, /target\.txt/);
 
     assert.equal(provider.streamCalls.length, 2);
     const secondRequest = JSON.stringify(provider.streamCalls[1].messages);
@@ -323,7 +328,7 @@ test('economic agent loop executes real write_file tool with confirmation, backu
     assert.equal(records[1].success, true);
     assert.equal(records[1].permission.behavior, 'allow');
     assert.equal(records[1].permission.decisionReason.type, 'user');
-    assert.equal(records[1].permission.classifier.requiresSecondConfirmation, true);
+    assert.equal(records[1].permission.classifier.requiresSecondConfirmation ?? false, false);
     assert.equal(records[1].readOnly, false);
     assert.equal(records[1].metadata.backups.length, 1);
     assert.equal(records[1].metadata.diff.addedLines, 1);
@@ -370,15 +375,15 @@ test('economic agent loop executes real edit_file tool with confirmation, backup
       runtimeTools: registry.list(),
       confirm: async prompt => {
         confirmCount++;
-        assert.equal(prompt.riskLevel, 'high');
-        assert.equal(prompt.requiresSecondConfirmation, true);
+        assert.equal(prompt.riskLevel, 'medium');
+        assert.equal(prompt.requiresSecondConfirmation ?? false, false);
         assert.match(prompt.details.join('\n'), /diff:/);
         return true;
       },
       confirmSecond: async prompt => {
         secondConfirmCount++;
-        assert.equal(prompt.riskLevel, 'high');
-        assert.equal(prompt.requiresSecondConfirmation, true);
+        assert.equal(prompt.riskLevel, 'medium');
+        assert.equal(prompt.requiresSecondConfirmation ?? false, false);
         return true;
       },
     });
@@ -387,7 +392,7 @@ test('economic agent loop executes real edit_file tool with confirmation, backup
     for await (const event of loop.run({ userInput: 'Replace old value in target.txt.', history: [], mode: 'economic' })) events.push(event);
 
     assert.equal(confirmCount, 1);
-    assert.equal(secondConfirmCount, 1);
+    assert.equal(secondConfirmCount, 0);
     assert.equal(await readFile(join(cwd, 'target.txt'), 'utf8'), 'alpha\nnew value\nomega\n');
 
     const editResult = events.filter(event => event.type === 'tool_result').at(-1);
@@ -396,6 +401,11 @@ test('economic agent loop executes real edit_file tool with confirmation, backup
     assert.match(editResult.result.output, /edit_file/);
     assert.match(editResult.result.output, /backups/);
     assert.match(editResult.result.output, /diff:/);
+
+    const finalEditAssistant = events.filter(event => event.type === 'assistant_message').at(-1);
+    assert.ok(finalEditAssistant && finalEditAssistant.type === 'assistant_message');
+    assert.match(finalEditAssistant.text, /\u672c\u8f6e\u5de5\u4f5c\u533a\u53d8\u66f4/);
+    assert.match(finalEditAssistant.text, /target\.txt/);
 
     assert.equal(provider.streamCalls.length, 2);
     const secondRequest = JSON.stringify(provider.streamCalls[1].messages);
@@ -411,7 +421,7 @@ test('economic agent loop executes real edit_file tool with confirmation, backup
     assert.equal(records[1].success, true);
     assert.equal(records[1].permission.behavior, 'allow');
     assert.equal(records[1].permission.decisionReason.type, 'user');
-    assert.equal(records[1].permission.classifier.requiresSecondConfirmation, true);
+    assert.equal(records[1].permission.classifier.requiresSecondConfirmation ?? false, false);
     assert.equal(records[1].readOnly, false);
     assert.equal(records[1].metadata.backups.length, 1);
     assert.equal(records[1].metadata.diff.addedLines, 1);
