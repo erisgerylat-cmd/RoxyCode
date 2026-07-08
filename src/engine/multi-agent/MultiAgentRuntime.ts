@@ -93,7 +93,7 @@ export class MultiAgentRuntime {
 
       for await (const eventBundle of settleAsCompleted(batch)) {
         if (eventBundle.claimed) yield { type: 'multi_agent_task_claimed', task: eventBundle.task, agentId: eventBundle.agentId };
-        if (eventBundle.started) yield { type: 'multi_agent_task_start', task: eventBundle.task, agentId: eventBundle.agentId };
+        if (eventBundle.started) yield { type: 'multi_agent_task_start', task: eventBundle.task, agentId: eventBundle.agentId, worktree: eventBundle.result.worktree };
         for (const conflict of eventBundle.conflicts) {
           conflicts.push(conflict);
           yield { type: 'multi_agent_conflict', conflict };

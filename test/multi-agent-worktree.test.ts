@@ -31,6 +31,10 @@ test('MultiAgentRuntime creates and cleans a worktree for sub-agent isolation', 
     const events = [];
     for await (const event of runtime.run({ userInput: 'Plan a tiny change', runtimeContext: null })) events.push(event);
 
+    const started = events.find(event => event.type === 'multi_agent_task_start');
+    assert.ok(started && started.type === 'multi_agent_task_start');
+    assert.match(started.worktree?.path ?? '', /\.roxycode/);
+
     const done = events.find(event => event.type === 'multi_agent_done');
     assert.ok(done && done.type === 'multi_agent_done');
     assert.equal(done.result.results.length, 1);

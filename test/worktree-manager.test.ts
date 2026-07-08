@@ -24,6 +24,10 @@ test('WorktreeManager creates, inspects, and removes a clean git worktree', { sk
 
     assert.ok(existsSync(lease.path));
     assert.match(lease.branch, /roxy-worktree-agent-clean/);
+    const listed = await manager.list();
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].slug, 'agent-clean');
+    assert.equal(listed[0].metadataFound, true);
 
     const status = await manager.status(lease);
     assert.equal(status.dirty, false);
@@ -49,9 +53,41 @@ test('WorktreeManager keeps dirty worktrees unless discardChanges is explicit', 
     assert.equal(kept.status?.dirty, true);
     assert.equal(existsSync(lease.path), true);
 
-    const removed = await manager.remove(lease, { discardChanges: true });
-    assert.equal(removed.removed, true);
+    const cleanup = await manager.cleanup({ slug: 'agent-dirty' });
+    assert.equal(cleanup.length, 1);
+    assert.equal(cleanup[0].removed, false);
+    assert.equal(cleanup[0].status?.dirty, true);
+
+    const removed = await manager.cleanup({ slug: 'agent-dirty', discardChanges: true });
+    assert.equal(removed[0].removed, true);
     assert.equal(existsSync(lease.path), false);
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test('WorktreeManager detects merge conflicts before changing the main workspace', { skip: HAS_GIT ? false : 'git not available' }, async () => {
+  const repo = await createGitRepo('roxy-worktree-merge-conflict-');
+  try {
+    const manager = new WorktreeManager(repo);
+    const lease = await manager.create({ slug: 'agent-conflict' });
+
+    await writeFile(join(lease.path, 'README.md'), '# from worktree\n', 'utf8');
+    git(lease.path, ['add', 'README.md']);
+    git(lease.path, ['commit', '-m', 'worktree change']);
+
+    await writeFile(join(repo, 'README.md'), '# from main\n', 'utf8');
+    git(repo, ['add', 'README.md']);
+    git(repo, ['commit', '-m', 'main change']);
+
+    const result = await manager.merge('agent-conflict');
+    assert.equal(result.merged, false);
+    assert.equal(result.conflict, true);
+    assert.ok(result.conflicts.some(item => item.includes('README.md')));
+    assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }).trim(), '');
+
+    const removed = await manager.cleanup({ slug: 'agent-conflict', discardChanges: true });
+    assert.equal(removed[0].removed, true);
   } finally {
     await rm(repo, { recursive: true, force: true });
   }

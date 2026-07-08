@@ -25,6 +25,7 @@ import { handleMemoryCommand } from './memory.js';
 import { handleWorkflowCommand } from './workflow.js';
 import { handleHooksCommand, handleMcpCommand, handlePluginCommand } from './extensions.js';
 import { handleAgentsCommand } from './agents.js';
+import { handleWorktreeCommand } from './worktree.js';
 import { renderDiagnosticsCommand } from './diagnostics.js';
 import { formatQueryProfile, type RuntimeStateSnapshot } from '../../runtime/index.js';
 import { redactConfigValue } from '../../core/configSchema.js';
@@ -281,6 +282,23 @@ export function createBuiltinCommands(options: BuiltinCommandFactoryOptions): Co
         { name: 'paths', description: isZh ? zh('agentsPaths') : 'Show multi-agent state path' },
       ],
       handler: args => handleAgentsCommand(args, options.language),
+    },
+    {
+      name: 'worktree',
+      description: isZh ? zh('worktreeDescription') : 'List, clean up, and merge RoxyCode isolated worktrees',
+      aliases: ['wt'],
+      category: 'dev',
+      source: 'builtin',
+      type: 'local',
+      usage: '/worktree [list|cleanup|merge|paths]',
+      examples: ['/worktree list', '/worktree cleanup', '/worktree cleanup agent-a --discard', '/worktree merge agent-a'],
+      subcommands: [
+        { name: 'list', description: isZh ? zh('worktreeList') : 'List RoxyCode-managed worktrees' },
+        { name: 'cleanup', description: isZh ? zh('worktreeCleanup') : 'Remove clean worktrees; dirty worktrees are kept unless --discard is passed', needsInput: true },
+        { name: 'merge', description: isZh ? zh('worktreeMerge') : 'Merge an isolated worktree branch after conflict checks', needsInput: true },
+        { name: 'paths', description: isZh ? zh('worktreePaths') : 'Show worktree storage paths' },
+      ],
+      handler: args => handleWorktreeCommand(args, options.language),
     },
     {
       name: 'plan',
@@ -1194,6 +1212,11 @@ type ZhKey =
   | 'agentsStatus'
   | 'agentsLocks'
   | 'agentsPaths'
+  | 'worktreeDescription'
+  | 'worktreeList'
+  | 'worktreeCleanup'
+  | 'worktreeMerge'
+  | 'worktreePaths'
   | 'mcpDescription'
   | 'hooksDescription'
   | 'pluginDescription'
@@ -1256,6 +1279,11 @@ const ZH: Record<ZhKey, string> = {
   agentsStatus: '\u67e5\u770b\u6700\u8fd1\u7684\u591a Agent \u8fd0\u884c',
   agentsLocks: '\u67e5\u770b\u6d3b\u52a8\u6587\u4ef6\u9501',
   agentsPaths: '\u663e\u793a\u591a Agent \u72b6\u6001\u8def\u5f84',
+  worktreeDescription: '\u7ba1\u7406 RoxyCode Ultimate \u9694\u79bb worktree',
+  worktreeList: '\u5217\u51fa RoxyCode \u7ba1\u7406\u7684 worktree',
+  worktreeCleanup: '\u6e05\u7406\u5e72\u51c0\u7684 worktree\uff1bdirty \u9ed8\u8ba4\u4fdd\u7559',
+  worktreeMerge: '\u5728\u51b2\u7a81\u68c0\u67e5\u540e\u5408\u5e76\u9694\u79bb worktree',
+  worktreePaths: '\u663e\u793a worktree \u5b58\u50a8\u8def\u5f84',
   mcpDescription: 'MCP \u5916\u90e8\u5de5\u5177\u7ba1\u7406',
   hooksDescription: 'Hooks \u547d\u4ee4\u3001\u63d0\u793a\u8bcd\u3001HTTP \u548c Agent \u6269\u5c55\u70b9\u7ba1\u7406',
   pluginDescription: 'RoxyCode \u672c\u5730\u63d2\u4ef6\u7ba1\u7406',

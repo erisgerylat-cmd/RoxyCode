@@ -1199,7 +1199,8 @@ export class REPL {
         console.log(accent(`\n  ${zh ? '\u591a Agent \u8ba1\u5212' : 'Multi-agent plan'} (${event.plan.source})`));
         for (const task of event.plan.tasks) {
           const deps = task.dependsOn.length > 0 ? ` <- ${task.dependsOn.join(', ')}` : '';
-          console.log(dim(`  - ${task.id} [${task.role}] ${task.title}${deps}`));
+          const scopes = task.fileScopes.length > 0 ? ` / ${zh ? '\u8303\u56f4' : 'scope'}: ${task.fileScopes.join(', ')}` : '';
+          console.log(dim(`  - ${task.id} [${task.role}] ${task.title}${deps}${scopes}`));
         }
         break;
       case 'multi_agent_task_claimed':
@@ -1207,9 +1208,15 @@ export class REPL {
         break;
       case 'multi_agent_task_start':
         console.log(secondary(`  ${zh ? '\u542f\u52a8' : 'started'} ${event.agentId}: ${event.task.title}`));
+        if (event.worktree) {
+          console.log(dim(`    Worktree: ${event.worktree.path} (${event.worktree.branch})`));
+        }
         break;
       case 'multi_agent_task_done':
         console.log(success(`  ${event.result.agentId} ${zh ? zhText('done') : 'done'} - ${event.result.duration}ms`));
+        if (event.result.worktree) {
+          console.log(dim(`    Worktree: ${event.result.worktree.cleanup} / ${event.result.worktree.path}`));
+        }
         break;
       case 'multi_agent_conflict':
         console.log(error(`  ${zh ? '\u591a Agent \u51b2\u7a81' : 'Multi-agent conflict'}: ${event.conflict.message}`));

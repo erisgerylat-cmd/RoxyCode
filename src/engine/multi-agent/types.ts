@@ -123,7 +123,7 @@ export interface MultiAgentStateFile {
 export type MultiAgentEvent =
   | { type: 'multi_agent_plan'; plan: MultiAgentPlan; usage: LLMUsage }
   | { type: 'multi_agent_task_claimed'; task: MultiAgentTask; agentId: string }
-  | { type: 'multi_agent_task_start'; task: MultiAgentTask; agentId: string }
+  | { type: 'multi_agent_task_start'; task: MultiAgentTask; agentId: string; worktree?: MultiAgentWorktreeInfo }
   | { type: 'multi_agent_task_done'; task: MultiAgentTask; result: MultiAgentTaskResult }
   | { type: 'multi_agent_conflict'; conflict: MultiAgentConflict }
   | { type: 'multi_agent_merge'; result: MultiAgentRunResult; text: string }
