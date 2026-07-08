@@ -21,7 +21,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 const DEFAULT_RETRIES = 2;
 
-export type StoreRiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | 'UNKNOWN';
+export type StoreRiskLevel = 'SAFE' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | 'UNKNOWN';
 
 export interface StoreClientOptions {
   baseUrl: string;
@@ -80,6 +80,41 @@ export interface StoreDownloadTicket {
   sizeBytes?: number;
   riskLevel: StoreRiskLevel;
   riskSummary?: string;
+  installCommand?: string;
+  verifyCommand?: string;
+  recordInstallApi?: string;
+}
+
+export interface StoreInstallPlan {
+  packageId?: number;
+  versionId?: number;
+  packageName: string;
+  displayName: string;
+  version: string;
+  latestVersion?: string;
+  installedVersion?: string;
+  updateAvailable: boolean;
+  installCommand?: string;
+  updateCommand?: string;
+  uninstallCommand?: string;
+  verifyCommand?: string;
+  downloadApi?: string;
+  recordInstallApi?: string;
+  sha256?: string;
+  sizeBytes?: number;
+  riskLevel: StoreRiskLevel;
+  riskSummary?: string;
+  manifest?: unknown;
+}
+
+export interface StoreInstallRecordResult {
+  recorded: boolean;
+  skippedReason?: 'missing-token';
+  error?: string;
+  installStatus?: string;
+  installedVersion?: string;
+  updateAvailable?: boolean;
+  raw?: unknown;
 }
 
 export interface StoreDownloadResult {
@@ -92,6 +127,10 @@ export interface StoreDownloadResult {
   riskLevel: StoreRiskLevel;
   riskSummary?: string;
   sizeBytes: number;
+  installPlan?: StoreInstallPlan;
+  installCommand?: string;
+  verifyCommand?: string;
+  recordInstallApi?: string;
 }
 
 export class StoreClient {
@@ -165,46 +204,48 @@ export class StoreClient {
     return items.map(normalizeVersion);
   }
 
+  async getInstallPlan(
+    name: string,
+    options: { version?: string; installedVersion?: string } = {},
+  ): Promise<StoreInstallPlan> {
+    assertPackageName(name);
+    const params = new URLSearchParams();
+    if (options.version) params.set('version', options.version);
+    if (options.installedVersion) params.set('installedVersion', options.installedVersion);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    const body = await this.getJson(`/packages/${encodeURIComponent(name)}/install-plan${suffix}`);
+    return normalizeInstallPlan(body, name, options.version);
+  }
+
   /**
    * 申请下载，取回预签名 URL + 期望 sha256 + 风险摘要。
    * version 省略时下载最新版（走 GET /packages/{name}/download）。
    */
   async requestDownload(name: string, version?: string): Promise<StoreDownloadTicket> {
     assertPackageName(name);
-    const path = version
-      ? `/packages/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/download`
-      : `/packages/${encodeURIComponent(name)}/download`;
-    const body = await this.requestJson(path, { method: version ? 'POST' : 'GET' });
-    if (!isRecord(body)) {
-      throw new RoxyError(`下载响应格式异常：${name}`, { category: 'network', code: 'STORE_BAD_RESPONSE' });
+    const suffix = version ? `?version=${encodeURIComponent(version)}` : '';
+    try {
+      const body = await this.requestJson(`/packages/${encodeURIComponent(name)}/download${suffix}`, { method: 'GET' });
+      return normalizeDownloadTicket(body, name, version);
+    } catch (error) {
+      if (!version || (!isHttpStatus(error, 404) && !isHttpStatus(error, 405))) throw error;
+      const legacyBody = await this.requestJson(
+        `/packages/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/download`,
+        { method: 'POST' },
+      );
+      return normalizeDownloadTicket(legacyBody, name, version);
     }
-
-    const downloadUrl = readString(body, ['downloadUrl', 'url', 'presignedUrl', 'signedUrl']);
-    if (!downloadUrl || !isValidHttpUrl(downloadUrl)) {
-      throw new RoxyError(`下载响应缺少合法的下载地址：${name}`, {
-        category: 'network',
-        code: 'STORE_DOWNLOAD_URL_INVALID',
-      });
-    }
-
-    const risk = isRecord(body.risk) ? body.risk : body;
-    return {
-      name,
-      version: readString(body, ['version']) || version || 'latest',
-      downloadUrl,
-      sha256: normalizeSha256(readString(body, ['sha256', 'fileSha256', 'checksum'])),
-      sizeBytes: readNumber(body, ['sizeBytes', 'size', 'fileSize']),
-      riskLevel: normalizeRisk(readString(risk, ['level', 'riskLevel'])),
-      riskSummary: readString(risk, ['summary', 'message', 'description']) || undefined,
-    };
   }
 
   /**
    * 完整流程：申请下载 → 流式写入本地缓存 → 计算 sha256 并与期望值比对。
    * 返回本地 .roxychar 文件路径，供 CharacterPackageManager 安装。
    */
-  async downloadToCache(name: string, version?: string): Promise<StoreDownloadResult> {
-    const ticket = await this.requestDownload(name, version);
+  async downloadToCache(name: string, version?: string, installedVersion?: string): Promise<StoreDownloadResult> {
+    const plan = await this.tryGetInstallPlan(name, { version, installedVersion });
+    const ticket = plan?.downloadApi
+      ? await this.requestDownloadByApi(plan.downloadApi, plan)
+      : await this.requestDownload(name, plan?.version ?? version);
     await mkdir(this.cacheDir, { recursive: true });
     const safeVersion = ticket.version.replace(/[^0-9A-Za-z.\-+]/g, '_');
     const filePath = join(this.cacheDir, `${name}-${safeVersion}.roxychar`);
@@ -238,7 +279,51 @@ export class StoreClient {
       riskLevel: ticket.riskLevel,
       riskSummary: ticket.riskSummary,
       sizeBytes: buffer.byteLength,
+      installPlan: plan,
+      installCommand: ticket.installCommand ?? plan?.installCommand,
+      verifyCommand: ticket.verifyCommand ?? plan?.verifyCommand,
+      recordInstallApi: ticket.recordInstallApi ?? plan?.recordInstallApi,
     };
+  }
+
+  async recordInstall(name: string, version?: string, recordInstallApi?: string): Promise<StoreInstallRecordResult> {
+    assertPackageName(name);
+    if (!this.token) {
+      return { recorded: false, skippedReason: 'missing-token' };
+    }
+
+    const suffix = version ? `?version=${encodeURIComponent(version)}` : '';
+    const path = recordInstallApi || `/packages/${encodeURIComponent(name)}/install${suffix}`;
+    try {
+      const body = await this.requestJson(path, { method: 'POST' });
+      const raw = isRecord(body) ? body : {};
+      return {
+        recorded: true,
+        installStatus: readString(raw, ['installStatus']) || undefined,
+        installedVersion: readString(raw, ['installedVersion']) || version,
+        updateAvailable: readBooleanOptional(raw, ['updateAvailable']),
+        raw: body,
+      };
+    } catch (error) {
+      return { recorded: false, error: errorText(error) };
+    }
+  }
+
+  private async tryGetInstallPlan(
+    name: string,
+    options: { version?: string; installedVersion?: string },
+  ): Promise<StoreInstallPlan | undefined> {
+    try {
+      return await this.getInstallPlan(name, options);
+    } catch (error) {
+      if (isHttpStatus(error, 404) || isHttpStatus(error, 405)) return undefined;
+      throw error;
+    }
+  }
+
+  private async requestDownloadByApi(path: string, plan: StoreInstallPlan): Promise<StoreDownloadTicket> {
+    const body = await this.requestJson(path, { method: 'GET' });
+    return normalizeDownloadTicket(body, plan.packageName, plan.version, plan);
   }
 
   private async downloadBinary(url: string): Promise<Buffer> {
@@ -266,7 +351,9 @@ export class StoreClient {
   }
 
   private async requestJson(path: string, init: RequestInit): Promise<unknown> {
-    const url = `${this.baseUrl}${path}`;
+    const url = isValidHttpUrl(path)
+      ? path
+      : `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (this.token) headers.Authorization = `Bearer ${this.token}`;
     if (init.method && init.method !== 'GET') headers['Content-Type'] = 'application/json';
@@ -282,14 +369,16 @@ export class StoreClient {
       });
     }
     if (!text.trim()) return {};
+    let parsed: unknown;
     try {
-      return JSON.parse(text) as unknown;
+      parsed = JSON.parse(text) as unknown;
     } catch {
       throw new RoxyError(`RoxyStore 响应不是合法 JSON：${path}`, {
         category: 'network',
         code: 'STORE_BAD_JSON',
       });
     }
+    return unwrapApiResponse(parsed, path);
   }
 
   private async fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
@@ -327,10 +416,84 @@ function normalizeSummary(value: unknown): StorePackageSummary {
     latestVersion: readString(raw, ['latestVersion', 'version']),
     author: readString(raw, ['author', 'authorName']) || undefined,
     official: readBoolean(raw, ['official', 'isOfficial']),
-    downloads: readNumber(raw, ['downloads', 'downloadCount']) ?? 0,
-    rating: readNumber(raw, ['rating', 'ratingAverage']),
+    downloads: readNumber(raw, ['downloads', 'downloadCount', 'totalDownloads']) ?? 0,
+    rating: readNumber(raw, ['rating', 'ratingAverage', 'ratingAvg']),
     riskLevel: normalizeRisk(readString(raw, ['riskLevel', 'risk'])),
-    tags: readStringArray(raw, ['tags']),
+    tags: [
+      ...readStringArray(raw, ['tags', 'keywords']),
+      ...readStringArray(raw, ['categories']),
+    ],
+  };
+}
+
+function normalizeInstallPlan(value: unknown, fallbackName: string, fallbackVersion?: string): StoreInstallPlan {
+  const raw = isRecord(value) ? value : {};
+  if (!isRecord(value)) {
+    throw new RoxyError(`RoxyStore install plan response is invalid: ${fallbackName}`, {
+      category: 'network',
+      code: 'STORE_BAD_RESPONSE',
+    });
+  }
+  const risk = isRecord(raw.risk) ? raw.risk : raw;
+  const version = readString(raw, ['version']) || fallbackVersion || readString(raw, ['latestVersion']) || 'latest';
+  return {
+    packageId: readNumber(raw, ['packageId']),
+    versionId: readNumber(raw, ['versionId']),
+    packageName: readString(raw, ['packageName', 'name']) || fallbackName,
+    displayName: readString(raw, ['displayName']) || fallbackName,
+    version,
+    latestVersion: readString(raw, ['latestVersion']) || undefined,
+    installedVersion: readString(raw, ['installedVersion']) || undefined,
+    updateAvailable: readBoolean(raw, ['updateAvailable']),
+    installCommand: readString(raw, ['installCommand']) || undefined,
+    updateCommand: readString(raw, ['updateCommand']) || undefined,
+    uninstallCommand: readString(raw, ['uninstallCommand']) || undefined,
+    verifyCommand: readString(raw, ['verifyCommand']) || undefined,
+    downloadApi: readString(raw, ['downloadApi']) || undefined,
+    recordInstallApi: readString(raw, ['recordInstallApi']) || undefined,
+    sha256: normalizeSha256(readString(raw, ['sha256', 'fileSha256', 'checksum'])),
+    sizeBytes: readNumber(raw, ['sizeBytes', 'size', 'fileSize']),
+    riskLevel: normalizeRisk(readString(risk, ['level', 'riskLevel'])),
+    riskSummary: readRiskSummary(risk),
+    manifest: raw.manifest,
+  };
+}
+
+function normalizeDownloadTicket(
+  value: unknown,
+  fallbackName: string,
+  fallbackVersion?: string,
+  plan?: StoreInstallPlan,
+): StoreDownloadTicket {
+  const raw = isRecord(value) ? value : {};
+  if (!isRecord(value)) {
+    throw new RoxyError(`RoxyStore download response is invalid: ${fallbackName}`, {
+      category: 'network',
+      code: 'STORE_BAD_RESPONSE',
+    });
+  }
+
+  const downloadUrl = readString(raw, ['downloadUrl', 'url', 'presignedUrl', 'signedUrl']);
+  if (!downloadUrl || !isValidHttpUrl(downloadUrl)) {
+    throw new RoxyError(`RoxyStore download response is missing a valid URL: ${fallbackName}`, {
+      category: 'network',
+      code: 'STORE_DOWNLOAD_URL_INVALID',
+    });
+  }
+
+  const risk = isRecord(raw.risk) ? raw.risk : raw;
+  const riskLevel = normalizeRisk(readString(risk, ['level', 'riskLevel']));
+  return {
+    name: readString(raw, ['packageName', 'name']) || plan?.packageName || fallbackName,
+    version: readString(raw, ['version']) || plan?.version || fallbackVersion || 'latest',
+    downloadUrl,
+    sha256: normalizeSha256(readString(raw, ['sha256', 'fileSha256', 'checksum'])) ?? plan?.sha256,
+    sizeBytes: readNumber(raw, ['sizeBytes', 'size', 'fileSize']) ?? plan?.sizeBytes,
+    riskLevel: riskLevel === 'UNKNOWN' ? plan?.riskLevel ?? 'UNKNOWN' : riskLevel,
+    riskSummary: readRiskSummary(risk) ?? plan?.riskSummary,
+    installCommand: readString(raw, ['installCommand']) || plan?.installCommand,
+    verifyCommand: readString(raw, ['verifyCommand']) || plan?.verifyCommand,
+    recordInstallApi: readString(raw, ['recordInstallApi']) || plan?.recordInstallApi,
   };
 }
 
@@ -348,8 +511,34 @@ function normalizeVersion(value: unknown): StorePackageVersion {
 
 function normalizeRisk(value: string): StoreRiskLevel {
   const upper = value.toUpperCase();
-  if (upper === 'LOW' || upper === 'MEDIUM' || upper === 'HIGH' || upper === 'CRITICAL') return upper;
+  if (upper === 'SAFE' || upper === 'LOW' || upper === 'MEDIUM' || upper === 'HIGH' || upper === 'CRITICAL') return upper;
   return 'UNKNOWN';
+}
+
+function readRiskSummary(raw: Record<string, unknown>): string | undefined {
+  const summary = readString(raw, ['summary', 'message', 'description']);
+  if (summary) return summary;
+  const warnings = readStringArray(raw, ['warnings']);
+  return warnings.length > 0 ? warnings.join('; ') : undefined;
+}
+
+function unwrapApiResponse(body: unknown, path: string): unknown {
+  if (!isRecord(body) || !('code' in body) || !('message' in body)) return body;
+
+  const code = typeof body.code === 'number' ? body.code : Number(body.code);
+  if (code !== 200) {
+    const message = readString(body, ['message']) || `code ${body.code}`;
+    throw new RoxyError(`RoxyStore API request failed: ${message}`, {
+      category: code >= 500 ? 'network' : 'validation',
+      code: 'STORE_API_ERROR',
+      details: { code: body.code, message, path },
+    });
+  }
+  return body.data ?? {};
+}
+
+function isHttpStatus(error: unknown, status: number): boolean {
+  return error instanceof RoxyError && error.details?.status === status;
 }
 
 function normalizeSha256(value: string): string | undefined {
@@ -388,15 +577,23 @@ function readNumber(obj: Record<string, unknown>, keys: string[]): number | unde
   for (const key of keys) {
     const value = obj[key];
     if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
   }
   return undefined;
 }
 
 function readBoolean(obj: Record<string, unknown>, keys: string[]): boolean {
+  return readBooleanOptional(obj, keys) ?? false;
+}
+
+function readBooleanOptional(obj: Record<string, unknown>, keys: string[]): boolean | undefined {
   for (const key of keys) {
     if (typeof obj[key] === 'boolean') return obj[key] as boolean;
   }
-  return false;
+  return undefined;
 }
 
 function readStringArray(obj: Record<string, unknown>, keys: string[]): string[] {

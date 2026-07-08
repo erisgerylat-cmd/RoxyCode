@@ -24,6 +24,7 @@ import {
   StoreClient,
   type StoreClientOptions,
   type StoreDownloadResult,
+  type StoreInstallRecordResult,
 } from '../marketplace/StoreClient.js';
 
 export interface InstallOptions {
@@ -42,6 +43,7 @@ export interface RemoteInstallOptions extends InstallOptions {
 
 export interface RemoteInstallResult extends InstallResult {
   download: StoreDownloadResult;
+  installRecord: StoreInstallRecordResult;
 }
 
 export interface UninstallOptions {
@@ -174,7 +176,8 @@ export class CharacterPackageManager {
    */
   async installFromStore(packageName: string, options: RemoteInstallOptions): Promise<RemoteInstallResult> {
     const client = new StoreClient(options.storeOptions);
-    const download = await client.downloadToCache(packageName, options.version);
+    const existing = await this.getInstalledPackage(packageName, options);
+    const download = await client.downloadToCache(packageName, options.version, existing?.version);
 
     if (download.expectedSha256 && !download.verified) {
       await rm(download.filePath, { force: true });
@@ -188,7 +191,13 @@ export class CharacterPackageManager {
       paths: options.paths,
     });
 
-    return { ...result, download };
+    const installRecord = await client.recordInstall(
+      result.manifest.name,
+      result.manifest.version,
+      download.recordInstallApi,
+    );
+
+    return { ...result, download, installRecord };
   }
 
   async updatePackage(packagePath: string, options: UpdateOptions = {}): Promise<UpdateResult> {

@@ -370,8 +370,19 @@ async function installFromStoreCommand(
     console.log(`  角色 id: ${result.character.id}`);
     console.log(`  SHA-256: ${download.sha256}${download.verified ? chalk.green(' (已校验)') : chalk.yellow(' (服务端未提供期望值)')}`);
     if (download.riskLevel !== 'UNKNOWN') {
-      const riskColor = download.riskLevel === 'LOW' ? chalk.green : download.riskLevel === 'MEDIUM' ? chalk.yellow : chalk.red;
+      const riskColor = download.riskLevel === 'SAFE' || download.riskLevel === 'LOW'
+        ? chalk.green
+        : download.riskLevel === 'MEDIUM'
+          ? chalk.yellow
+          : chalk.red;
       console.log(`  风险等级: ${riskColor(download.riskLevel)}${download.riskSummary ? ` - ${download.riskSummary}` : ''}`);
+    }
+    if (result.installRecord.recorded) {
+      console.log(chalk.green(`  Store install record: synced${result.installRecord.installedVersion ? ` (${result.installRecord.installedVersion})` : ''}`));
+    } else if (result.installRecord.skippedReason === 'missing-token') {
+      console.log(chalk.yellow('  Store install record: skipped because store.token is not configured.'));
+    } else if (result.installRecord.error) {
+      console.log(chalk.yellow(`  Store install record: sync failed (${result.installRecord.error})`));
     }
     for (const warning of result.warnings) {
       console.log(chalk.yellow(`  warning: ${warning}`));

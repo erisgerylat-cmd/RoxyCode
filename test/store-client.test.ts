@@ -82,6 +82,113 @@ test('StoreClient.downloadToCache verifies sha256 and returns local path', async
   }
 });
 
+test('StoreClient unwraps RoxyStore ApiResponse install plan and records install', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'roxy-storeclient-apiresponse-'));
+  try {
+    const pkgDir = join(root, 'roxy-sensei-src');
+    await writeCharacterPackageFixture(pkgDir);
+    const packed = await packCharacterPackage(pkgDir, {
+      outDir: join(root, 'dist'),
+      force: true,
+    });
+
+    const fileBytes = await import('node:fs/promises').then(fs => fs.readFile(packed.packagePath));
+    const expectedSha256 = createHash('sha256').update(fileBytes).digest('hex');
+    let installRecordAuth = '';
+    let installRecordMethod = '';
+
+    const mockFetch = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const urlStr = String(url);
+      if (urlStr.includes('/packages?')) {
+        return jsonResp(apiOk({
+          content: [{
+            packageName: 'roxy-sensei',
+            displayName: 'Roxy Sensei',
+            description: 'Wrapped package',
+            latestVersion: '1.0.0',
+            totalDownloads: '128',
+            ratingAvg: '4.8',
+            riskLevel: 'SAFE',
+            keywords: ['test'],
+            categories: ['assistant'],
+          }],
+        }));
+      }
+      if (urlStr.includes('/packages/roxy-sensei/install-plan')) {
+        return jsonResp(apiOk({
+          packageName: 'roxy-sensei',
+          version: '1.0.0',
+          installedVersion: '0.9.0',
+          updateAvailable: true,
+          downloadApi: '/packages/roxy-sensei/download?version=1.0.0',
+          recordInstallApi: '/packages/roxy-sensei/install?version=1.0.0',
+          installCommand: 'roxycode /character install roxy-sensei@1.0.0',
+          verifyCommand: 'roxycode /character verify roxy-sensei',
+          sha256: expectedSha256,
+          size: String(fileBytes.byteLength),
+          risk: { level: 'SAFE', summary: 'Verified by store scanner.' },
+        }));
+      }
+      if (urlStr.includes('/packages/roxy-sensei/download?version=1.0.0')) {
+        return jsonResp(apiOk({
+          version: '1.0.0',
+          downloadUrl: 'https://cdn.example/roxy-sensei-1.0.0.roxychar',
+        }));
+      }
+      if (urlStr.includes('/packages/roxy-sensei/install?version=1.0.0')) {
+        const headers = init?.headers as Record<string, string> | undefined;
+        installRecordAuth = headers?.Authorization ?? '';
+        installRecordMethod = init?.method ?? '';
+        return jsonResp(apiOk({
+          installStatus: 'INSTALLED',
+          installedVersion: '1.0.0',
+          updateAvailable: false,
+        }));
+      }
+      if (urlStr.includes('roxy-sensei-1.0.0.roxychar')) {
+        return binaryResp(fileBytes);
+      }
+      return new Response('Not Found', { status: 404 });
+    };
+
+    const cacheDir = join(root, 'cache');
+    await mkdir(cacheDir, { recursive: true });
+    const client = new StoreClient({
+      baseUrl: 'https://store.example/api',
+      token: 'test-token',
+      cacheDir,
+      fetchImpl: mockFetch as typeof fetch,
+    });
+
+    const results = await client.searchPackages({ q: 'roxy' });
+    assert.equal(results.length, 1);
+    assert.equal(results[0].downloads, 128);
+    assert.equal(results[0].rating, 4.8);
+    assert.equal(results[0].riskLevel, 'SAFE');
+    assert.deepEqual(results[0].tags, ['test', 'assistant']);
+
+    const downloaded = await client.downloadToCache('roxy-sensei', '1.0.0', '0.9.0');
+    assert.equal(downloaded.version, '1.0.0');
+    assert.equal(downloaded.verified, true);
+    assert.equal(downloaded.expectedSha256, expectedSha256);
+    assert.equal(downloaded.installPlan?.updateAvailable, true);
+    assert.equal(downloaded.installCommand, 'roxycode /character install roxy-sensei@1.0.0');
+    assert.equal(downloaded.verifyCommand, 'roxycode /character verify roxy-sensei');
+    assert.equal(downloaded.recordInstallApi, '/packages/roxy-sensei/install?version=1.0.0');
+    assert.equal(downloaded.riskLevel, 'SAFE');
+
+    const record = await client.recordInstall('roxy-sensei', downloaded.version, downloaded.recordInstallApi);
+    assert.equal(record.recorded, true);
+    assert.equal(record.installStatus, 'INSTALLED');
+    assert.equal(record.installedVersion, '1.0.0');
+    assert.equal(record.updateAvailable, false);
+    assert.equal(installRecordMethod, 'POST');
+    assert.equal(installRecordAuth, 'Bearer test-token');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('StoreClient.downloadToCache rejects sha256 mismatch and deletes cached file', async () => {
   const root = await mkdtemp(join(tmpdir(), 'roxy-storeclient-mismatch-'));
   try {
@@ -124,6 +231,38 @@ test('StoreClient.downloadToCache rejects sha256 mismatch and deletes cached fil
   }
 });
 
+test('StoreClient.requestDownload falls back to legacy version endpoint', async () => {
+  const calls: Array<{ url: string; method?: string }> = [];
+  const mockFetch = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const urlStr = String(url);
+    calls.push({ url: urlStr, method: init?.method });
+    if (urlStr.includes('/packages/roxy-sensei/download?version=2.0.0')) {
+      return new Response('Not Found', { status: 404 });
+    }
+    if (urlStr.includes('/packages/roxy-sensei/versions/2.0.0/download')) {
+      return jsonResp({
+        version: '2.0.0',
+        downloadUrl: 'https://cdn.example/legacy-roxy-sensei.roxychar',
+        riskLevel: 'LOW',
+      });
+    }
+    return new Response('Not Found', { status: 404 });
+  };
+
+  const client = new StoreClient({
+    baseUrl: 'https://example.com',
+    fetchImpl: mockFetch as typeof fetch,
+  });
+
+  const ticket = await client.requestDownload('roxy-sensei', '2.0.0');
+  assert.equal(ticket.version, '2.0.0');
+  assert.equal(ticket.downloadUrl, 'https://cdn.example/legacy-roxy-sensei.roxychar');
+  assert.equal(ticket.riskLevel, 'LOW');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].method, 'GET');
+  assert.equal(calls[1].method, 'POST');
+});
+
 test('StoreClient constructor rejects invalid baseUrl', () => {
   assert.throws(
     () => new StoreClient({ baseUrl: 'not-a-url', fetchImpl: fetch }),
@@ -148,6 +287,7 @@ test('StoreClient download-to-cache then CharacterPackageManager install roundtr
 
     const mockFetch = async (url: string | URL | Request): Promise<Response> => {
       const urlStr = String(url);
+      if (urlStr.includes('/install-plan')) return new Response('Not Found', { status: 404 });
       if (urlStr.includes('/download')) {
         return jsonResp({ version: '1.0.0', downloadUrl: 'https://cdn.example/pkg.roxychar', sha256 });
       }
@@ -168,6 +308,8 @@ test('StoreClient download-to-cache then CharacterPackageManager install roundtr
     assert.equal(result.manifest.version, '1.0.0');
     assert.equal(result.download.verified, true);
     assert.equal(result.download.sha256.toLowerCase(), sha256.toLowerCase());
+    assert.equal(result.installRecord.recorded, false);
+    assert.equal(result.installRecord.skippedReason, 'missing-token');
     assert.equal(result.scope, 'project');
   } finally {
     process.chdir(originalCwd);
@@ -182,6 +324,10 @@ function jsonResp(data: unknown): Response {
     status: 200,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+function apiOk(data: unknown): unknown {
+  return { code: 200, message: 'success', data };
 }
 
 function binaryResp(data: Buffer): Response {
