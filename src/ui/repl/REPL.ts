@@ -752,6 +752,10 @@ export class REPL {
         attributes.mode = event.mode;
         attributes.label = event.label;
         break;
+      case 'agent_phase':
+        name = 'agent.phase';
+        attributes.phase = event.phase;
+        break;
       case 'model_request_start':
         name = 'llm.request_start';
         category = 'llm';
@@ -769,6 +773,12 @@ export class REPL {
         category = 'tool';
         attributes.toolName = event.toolCall.name;
         attributes.argumentKeys = Object.keys(event.toolCall.arguments);
+        break;
+      case 'tool_intent':
+        name = 'tool.intent';
+        category = 'tool';
+        attributes.toolName = event.toolCall.name;
+        attributes.intent = event.intent;
         break;
       case 'tool_execution_start':
         name = 'tool.execution_start';
@@ -790,6 +800,14 @@ export class REPL {
         attributes.durationMs = event.result.duration;
         attributes.outputChars = event.result.output.length;
         attributes.error = event.result.error;
+        break;
+      case 'tool_result_summary':
+        name = 'tool.result_summary';
+        category = 'tool';
+        success = event.success;
+        attributes.toolName = event.toolCall.name;
+        attributes.summary = event.summary;
+        attributes.hasRecoverySuggestion = Boolean(event.recoverySuggestion);
         break;
       case 'context_compacted':
         name = 'runtime.context_compacted';
@@ -881,6 +899,10 @@ export class REPL {
         console.log(primary(`  ${event.label} - ${event.description}`));
         this.startStatusBar('thinking', zh ? '\u6b63\u5728\u51c6\u5907\u4e0a\u4e0b\u6587\u4e0e\u5de5\u5177...' : 'Preparing context and tools...');
         break;
+      case 'agent_phase':
+        console.log(dim(`  ${phaseLabel(event.phase, zh)} ${event.message}`));
+        this.startStatusBar(phaseToStatus(event.phase), event.message);
+        break;
       case 'model_request_start':
         this.startStatusBar(modelPhaseToStatus(event.phase), modelPhaseLabel(event.phase, event.iteration, zh));
         break;
@@ -908,6 +930,10 @@ export class REPL {
         if (progress) this.updateStatusBar('analyzing', progress);
         break;
       }
+      case 'tool_intent':
+        console.log(dim(`  ${zh ? '\u610f\u56fe' : 'Intent'}: ${event.intent}`));
+        this.updateStatusBar('tool', event.intent);
+        break;
       case 'tool_execution_start':
         this.clearStatusBar();
         this.toolActivityRenderer.markToolExecuting(event.toolCall);
@@ -923,6 +949,12 @@ export class REPL {
         this.clearStatusBar();
         this.toolActivityRenderer.markToolResult(event.toolCall, event.result);
         this.statusBar.onToolEnd();
+        break;
+      case 'tool_result_summary':
+        console.log(dim(`  ${zh ? '\u7ed3\u679c\u6458\u8981' : 'Result'}: ${event.summary}`));
+        if (!event.success && event.recoverySuggestion) {
+          console.log(chalk.yellow(`  ${zh ? '\u6062\u590d\u5efa\u8bae' : 'Recovery'}: ${event.recoverySuggestion}`));
+        }
         break;
       case 'verification':
         this.clearStatusBar();
@@ -1005,8 +1037,14 @@ export class REPL {
       case 'mode_start':
         await this.sessionStore.append({ type: 'note', note: 'agent mode start', metadata: { mode: event.mode, label: event.label } });
         break;
+      case 'agent_phase':
+        await this.sessionStore.append({ type: 'note', note: 'agent phase', metadata: { phase: event.phase, message: event.message } });
+        break;
       case 'model_request_start':
         await this.sessionStore.append({ type: 'note', note: 'model request start', metadata: { phase: event.phase, iteration: event.iteration } });
+        break;
+      case 'tool_intent':
+        await this.sessionStore.append({ type: 'note', note: 'tool intent', metadata: { tool: event.toolCall.name, intent: event.intent } });
         break;
       case 'tool_execution_start':
         await this.sessionStore.append({ type: 'note', note: 'tool execution start', metadata: { tool: event.toolCall.name, args: sanitizeSessionMetadata(event.toolCall.arguments) } });
@@ -1028,6 +1066,9 @@ export class REPL {
         break;
       case 'tool_result_pairing_repaired':
         await this.sessionStore.append({ type: 'note', note: 'tool result pairing repaired', metadata: { ...event.report } });
+        break;
+      case 'tool_result_summary':
+        await this.sessionStore.append({ type: 'note', note: 'tool result summary', metadata: { tool: event.toolCall.name, success: event.success, summary: event.summary, recoverySuggestion: event.recoverySuggestion } });
         break;
       case 'context_compacted':
         await this.sessionStore.append({ type: 'note', note: 'context compacted', metadata: { layer: event.layer, beforeTokens: event.beforeTokens, afterTokens: event.afterTokens } });
@@ -1443,6 +1484,37 @@ function modelPhaseLabel(phase: ModelRequestPhase, iteration: number | undefined
     case 'tool_loop': return `\u6b63\u5728\u601d\u8003\u662f\u5426\u8c03\u7528\u5de5\u5177${suffix}`;
     case 'response': return `\u6b63\u5728\u751f\u6210\u56de\u590d${suffix}`;
   }
+}
+
+function phaseToStatus(phase: 'analyze' | 'plan' | 'execute' | 'verify' | 'summarize'): StatusState {
+  switch (phase) {
+    case 'plan': return 'planning';
+    case 'execute': return 'executing';
+    case 'verify': return 'analyzing';
+    case 'summarize': return 'thinking';
+    case 'analyze':
+    default:
+      return 'thinking';
+  }
+}
+
+function phaseLabel(phase: 'analyze' | 'plan' | 'execute' | 'verify' | 'summarize', zh: boolean): string {
+  if (!zh) {
+    return {
+      analyze: '[analyze]',
+      plan: '[plan]',
+      execute: '[execute]',
+      verify: '[verify]',
+      summarize: '[summary]',
+    }[phase];
+  }
+  return {
+    analyze: '[分析]',
+    plan: '[计划]',
+    execute: '[执行]',
+    verify: '[验证]',
+    summarize: '[总结]',
+  }[phase];
 }
 function sanitizeSessionMetadata(value: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};

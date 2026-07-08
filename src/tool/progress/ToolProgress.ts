@@ -22,13 +22,17 @@ export function describeToolProgress(event: ToolProgressEvent, language: 'zh-CN'
     case 'search_match':
       return zh ? `搜索匹配 ${event.matchCount}: ${shortPath(event.path)}:${event.line}` : `Match ${event.matchCount}: ${shortPath(event.path)}:${event.line}`;
     case 'search_complete':
-      return zh ? `搜索完成：${event.matches} 个匹配` : `Search complete, ${event.matches} matches`;
+      return zh
+        ? `搜索完成，${event.matches} 个匹配${event.truncated ? '，结果已截断' : ''}`
+        : `Search complete, ${event.matches} matches${event.truncated ? ', truncated' : ''}`;
     case 'command_start':
       return zh ? `正在执行命令: ${clip(event.command, 80)}` : `Running command: ${clip(event.command, 80)}`;
     case 'output_chunk':
       return zh ? `命令输出 ${event.stream}: ${formatCount(event.text.length)} chars` : `${event.stream}: ${formatCount(event.text.length)} chars`;
     case 'command_complete':
-      return zh ? `命令结束，退出码 ${event.exitCode ?? 'null'}` : `Command finished, exit ${event.exitCode ?? 'null'}`;
+      return zh
+        ? `命令结束，退出码 ${event.exitCode ?? 'null'}${event.timedOut ? '，已超时' : ''}`
+        : `Command finished, exit ${event.exitCode ?? 'null'}${event.timedOut ? ', timed out' : ''}`;
     case 'mcp_call':
       return event.phase === 'start'
         ? zh ? `正在调用 MCP ${event.server}/${event.tool}` : `Calling MCP ${event.server}/${event.tool}`

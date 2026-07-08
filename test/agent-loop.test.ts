@@ -97,6 +97,93 @@ test('economic agent loop feeds tool_result back to the model and yields Claude-
   }
 });
 
+test('economic agent loop emits layered tool UX events and compacts oversized model tool results', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-agent-loop-summary-'));
+  try {
+    const toolCall: ToolCall = { id: 'call-large', name: 'fake_read', arguments: { path: 'large.log' } };
+    const largeOutput = `<tool_result name="fake_read" status="success">\n${'alpha\n'.repeat(6000)}TAIL_MARKER_SHOULD_NOT_REACH_MODEL\n</tool_result>`;
+    const provider = new ScriptedProvider([
+      [
+        { type: 'text', text: '我需要读取大文件。' },
+        { type: 'tool_call_start', toolCall },
+        { type: 'done', usage: USAGE, toolCalls: [toolCall], finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text', text: '大文件结果已按摘要处理。' },
+        { type: 'done', usage: USAGE, toolCalls: [], finishReason: 'stop' },
+      ],
+    ]);
+    const executor = new FakeToolExecutor({
+      success: true,
+      output: largeOutput,
+      duration: 12,
+      metadata: { path: 'large.log', totalLines: 6001 },
+    });
+    const loop = createLoop({ cwd, provider, executor });
+
+    const events = [];
+    for await (const event of loop.run({ userInput: '读取 large.log 并总结。', history: [], mode: 'economic' })) events.push(event);
+
+    assert.ok(events.some(event => event.type === 'agent_phase' && event.phase === 'analyze'));
+    const intent = events.find(event => event.type === 'tool_intent');
+    assert.ok(intent && intent.type === 'tool_intent');
+    assert.match(intent.intent, /fake_read/);
+
+    const summary = events.find(event => event.type === 'tool_result_summary');
+    assert.ok(summary && summary.type === 'tool_result_summary');
+    assert.equal(summary.success, true);
+    assert.match(summary.summary, /large\.log/);
+
+    const rawToolResult = events.find(event => event.type === 'tool_result');
+    assert.ok(rawToolResult && rawToolResult.type === 'tool_result');
+    assert.match(rawToolResult.result.output, /TAIL_MARKER_SHOULD_NOT_REACH_MODEL/);
+
+    const secondRequest = JSON.stringify(provider.streamCalls[1].messages);
+    assert.match(secondRequest, /compactedForModel/);
+    assert.match(secondRequest, /model tool result preview truncated/);
+    assert.doesNotMatch(secondRequest, /TAIL_MARKER_SHOULD_NOT_REACH_MODEL/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('economic agent loop emits recovery suggestion for failed tools', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-agent-loop-recovery-'));
+  try {
+    const toolCall: ToolCall = { id: 'call-denied', name: 'fake_read', arguments: { path: '../secret.txt' } };
+    const provider = new ScriptedProvider([
+      [
+        { type: 'text', text: '我先读取文件。' },
+        { type: 'tool_call_start', toolCall },
+        { type: 'done', usage: USAGE, toolCalls: [toolCall], finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text', text: '权限被拒绝，我会缩小范围。' },
+        { type: 'done', usage: USAGE, toolCalls: [], finishReason: 'stop' },
+      ],
+    ]);
+    const executor = new FakeToolExecutor({
+      success: false,
+      output: '<tool_result name="fake_read" status="error">Permission denied</tool_result>',
+      error: 'Permission denied',
+      duration: 5,
+      metadata: { phase: 'permission', errorCategory: 'permission' },
+    });
+    const loop = createLoop({ cwd, provider, executor });
+
+    const events = [];
+    for await (const event of loop.run({ userInput: '读取项目外文件。', history: [], mode: 'economic' })) events.push(event);
+
+    const summary = events.find(event => event.type === 'tool_result_summary');
+    assert.ok(summary && summary.type === 'tool_result_summary');
+    assert.equal(summary.success, false);
+    assert.match(summary.summary, /失败|failed/);
+    assert.match(summary.recoverySuggestion ?? '', /权限|permission/i);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 
 
 test('economic agent loop executes real read_file tool and returns tool_result to the model', async () => {

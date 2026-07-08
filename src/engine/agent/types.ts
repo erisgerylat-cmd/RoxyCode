@@ -9,12 +9,14 @@ import type { TelemetryLogger } from '../../telemetry/index.js';
 import type { MultiAgentEvent } from '../multi-agent/index.js';
 import type { QueryProfileSummary } from '../../runtime/index.js';
 import type { TodoStore } from '../../tool/builtin/todoWrite.js';
+import type { AgentPhase } from './ToolResultSummarizer.js';
 
 export type AgentLoopMode = 'lite' | 'economic' | 'standard' | 'ultimate' | 'plan';
 
 export type AgentLoopEvent =
   | MultiAgentEvent
   | { type: 'mode_start'; mode: AgentLoopMode; label: string; description: string }
+  | { type: 'agent_phase'; phase: AgentPhase; message: string }
   | { type: 'model_request_start'; phase: 'planning' | 'response' | 'tool_loop' | 'verification'; iteration?: number }
   | { type: 'tool_result_pairing_repaired'; report: LLMToolResultPairingRepair }
   | { type: 'planning'; text: string }
@@ -22,9 +24,11 @@ export type AgentLoopEvent =
   | { type: 'assistant_message'; text: string }
   | { type: 'tool_call_start'; toolCall: ToolCall }
   | { type: 'tool_call_delta'; id: string; argsDelta: string }
+  | { type: 'tool_intent'; toolCall: ToolCall; intent: string }
   | { type: 'tool_execution_start'; toolCall: ToolCall }
   | { type: 'tool_progress'; toolCall: ToolCall; progress: ToolProgressEvent }
   | { type: 'tool_result'; toolCall: ToolCall; result: ToolResult }
+  | { type: 'tool_result_summary'; toolCall: ToolCall; summary: string; success: boolean; recoverySuggestion?: string }
   | { type: 'verification'; text: string }
   | { type: 'context_compacted'; layer: string; beforeTokens: number; afterTokens: number }
   | { type: 'token_budget_continue'; continuationCount: number; pct: number; turnTokens: number; budget: number }

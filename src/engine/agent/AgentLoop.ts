@@ -21,6 +21,12 @@ import type { Tool, ToolDefinition, ToolPermissionMode } from '../../tool/index.
 import { loadCharacterPromptContext } from '../../aesthetic/character/CharacterPromptLoader.js';
 import { ProfileManager } from '../../session/profile/ProfileManager.js';
 import type { UserProfile } from '../../profile/types.js';
+import {
+  describeAgentPhase,
+  describeToolIntent,
+  presentToolResult,
+  type AgentPhase,
+} from './ToolResultSummarizer.js';
 
 const ZERO_USAGE: LLMUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
@@ -36,6 +42,7 @@ export class AgentLoop {
     const onToolResultPairingRepair = (report: LLMToolResultPairingRepair): void => { pairingRepairs.push(report); };
     const profiler = new QueryProfiler(input.mode);
     yield { type: 'mode_start', mode: spec.mode, label: spec.label, description: spec.description };
+    yield this.phaseEvent('analyze');
 
     try {
       profiler.mark('query_hook_start', 'agent_start');
@@ -114,6 +121,7 @@ export class AgentLoop {
 
       if (spec.requiresPlan) {
         profiler.mark('query_model_request_start', 'planning');
+        yield this.phaseEvent('plan');
         yield { type: 'model_request_start', phase: 'planning' };
         const planResult = await this.options.llmProvider.chat({
           messages: [
@@ -139,10 +147,12 @@ export class AgentLoop {
       }
 
       if (spec.allowTools && this.options.llmProvider.supportsTools) {
+        yield this.phaseEvent('execute');
         const loopResult = yield* this.runToolLoop(messages, spec.maxIterations, input.mode, spec.toolPermissionMode ?? 'strict', tokenBudget, budgetTracker, totalUsage, profiler, pairingRepairs, onToolResultPairingRepair);
         messages = loopResult.messages;
         totalUsage = addUsage(totalUsage, loopResult.usage);
       } else {
+        yield this.phaseEvent('summarize');
         const liteResult = yield* this.runLiteLoop(messages, tokenBudget, budgetTracker, totalUsage, profiler, pairingRepairs, onToolResultPairingRepair);
         messages = liteResult.messages;
         totalUsage = addUsage(totalUsage, liteResult.usage);
@@ -152,6 +162,7 @@ export class AgentLoop {
         const prepared = await this.prepareContext([...messages, userMessage(buildVerificationPrompt(this.options.language))], profiler);
         if (prepared.compactionEvent) yield prepared.compactionEvent;
         profiler.mark('query_model_request_start', 'verification');
+        yield this.phaseEvent('verify');
         yield { type: 'model_request_start', phase: 'verification' };
         const verification = await this.options.llmProvider.chat({
           messages: prepared.messages,
@@ -204,6 +215,7 @@ export class AgentLoop {
       profiler.mark('query_end');
       const queryProfile = profiler.snapshot();
       this.options.telemetry?.log({ name: 'query.profile', category: 'agent', durationMs: queryProfile.totalMs, success: true, attributes: profileTelemetryAttributes(queryProfile) }).catch(() => undefined);
+      yield this.phaseEvent('summarize');
       yield { type: 'usage', usage: totalUsage };
       yield { type: 'done', messages, usage: totalUsage, profile: queryProfile };
     } catch (error) {
@@ -235,6 +247,11 @@ export class AgentLoop {
       ...history,
       userMessage(userInput),
     ];
+  }
+
+  private phaseEvent(phase: AgentPhase): AgentLoopEvent {
+    const characterName = this.options.language === 'en-US' ? this.options.character.nameEn : this.options.character.name;
+    return { type: 'agent_phase', phase, message: describeAgentPhase(phase, this.options.language, characterName) };
   }
 
   private async *runLiteLoop(
@@ -419,6 +436,11 @@ export class AgentLoop {
       for await (const event of streamingExecutor.run()) {
         if (event.type === 'tool_execution_start') {
           profiler.mark('query_tool_execution_start', event.toolCall.name);
+          yield {
+            type: 'tool_intent',
+            toolCall: event.toolCall,
+            intent: describeToolIntent(event.toolCall, this.options.language),
+          };
           yield event;
           continue;
         }
@@ -430,7 +452,15 @@ export class AgentLoop {
 
         profiler.mark('query_tool_execution_end', event.toolCall.name);
         yield event;
-        messages = [...messages, toolResultMessage(event.toolCall, event.result)];
+        const presentation = presentToolResult(event.toolCall, event.result, this.options.language);
+        yield {
+          type: 'tool_result_summary',
+          toolCall: event.toolCall,
+          summary: presentation.summary,
+          success: event.result.success,
+          recoverySuggestion: presentation.recoverySuggestion,
+        };
+        messages = [...messages, toolResultMessage(event.toolCall, presentation.modelResult)];
       }
     }
 
