@@ -16,7 +16,7 @@ test('character command installs, lists, updates, validates, and uninstalls pack
     process.chdir(root);
     const source = join(root, 'source', 'roxy-sensei');
     await writeCharacterPackageFixture(source, { version: '1.0.0', title: 'Teacher v1' });
-    const characterManager = new CharacterManager(new ConfigManager(root), root);
+    const characterManager = new CharacterManager(new ConfigManager(root, root), root);
     await characterManager.loadCustomCharacters();
 
     let output = await captureConsole(() => handleCharacterCommand(['packages'], characterManager));

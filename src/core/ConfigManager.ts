@@ -60,9 +60,9 @@ export class ConfigManager {
   private readonly localConfigPath: string;
   private readonly cwd: string;
 
-  constructor(cwd: string = process.cwd()) {
+  constructor(cwd: string = process.cwd(), home: string = homedir()) {
     this.cwd = cwd;
-    this.globalConfigPath = join(homedir(), '.roxycode', 'config.json');
+    this.globalConfigPath = join(home, '.roxycode', 'config.json');
     this.projectConfigPath = join(cwd, '.roxycode', 'config.json');
     this.localConfigPath = join(cwd, '.roxycode', 'config.local.json');
     this.config = structuredClone(DEFAULT_CONFIG);

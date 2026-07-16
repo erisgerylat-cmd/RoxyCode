@@ -21,6 +21,18 @@ const fakeTool: ToolDefinition = {
   },
 };
 
+test('OpenAI-compatible provider preserves its configured runtime identity', () => {
+  const provider = new OpenAIProvider({
+    apiKey: 'test-key',
+    baseUrl: 'https://example.test/v1',
+    model: 'gpt-contract',
+    providerId: 'compatible',
+  });
+
+  assert.equal(provider.id, 'compatible');
+  assert.equal(provider.name, 'OpenAI-compatible');
+});
+
 test('OpenAI-compatible provider posts chat completion requests and parses JSON responses', async () => {
   const server = createServer(async (req, res) => {
     const body = JSON.parse(await readBody(req)) as Record<string, any>;

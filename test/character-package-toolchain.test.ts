@@ -21,7 +21,7 @@ test('character package template creates a loadable and valid standard package',
   const root = await mkdtemp(join(tmpdir(), 'roxy-character-template-'));
   try {
     const cwd = join(root, 'project');
-    const manager = new CharacterManager(new ConfigManager(cwd), cwd);
+    const manager = new CharacterManager(new ConfigManager(cwd, root), cwd);
     await manager.loadCustomCharacters();
     await manager.switchCharacter('roxy');
 
@@ -95,7 +95,7 @@ test('character package packer creates installable roxychar archives with manife
 test('character exporter exports built-in metadata and optional roxychar archives', async () => {
   const root = await mkdtemp(join(tmpdir(), 'roxy-character-exporter-'));
   try {
-    const manager = new CharacterManager(new ConfigManager(root), root);
+    const manager = new CharacterManager(new ConfigManager(root, root), root);
     await manager.loadCustomCharacters();
     const roxy = manager.getCharacter('roxy');
     assert.ok(roxy);
@@ -132,7 +132,7 @@ test('character command supports create --package, pack, and export --roxychar',
   const originalCwd = process.cwd();
   try {
     process.chdir(root);
-    const manager = new CharacterManager(new ConfigManager(root), root);
+    const manager = new CharacterManager(new ConfigManager(root, root), root);
     await manager.loadCustomCharacters();
 
     let output = await captureConsole(() => handleCharacterCommand(['create', 'my-sensei', '--package'], manager));

@@ -45,7 +45,7 @@ export class LLMFactory {
       );
     }
 
-    return new ProviderClass({ apiKey, model, baseUrl, fallbackModels });
+    return new ProviderClass({ apiKey, model, baseUrl, fallbackModels, providerId });
   }
 
   static getAvailableProviders(): string[] {

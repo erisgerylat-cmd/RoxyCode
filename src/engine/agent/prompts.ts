@@ -107,6 +107,17 @@ export function buildPlanPrompt(userInput: string, language: 'zh-CN' | 'en-US'):
   ].join('\n');
 }
 
+export function buildPlanContinuationPrompt(mode: AgentLoopMode, language: 'zh-CN' | 'en-US'): string {
+  if (mode === 'plan') {
+    return language === 'en-US'
+      ? 'Continue in read-only Plan mode. Use only the available read/search/todo tools to verify assumptions and refine the plan. Do not modify the workspace.'
+      : '继续只读 Plan 模式。只使用当前可用的读取、搜索和 Todo 工具核实假设并细化计划，不要修改工作区。';
+  }
+  return language === 'en-US'
+    ? 'Proceed with the plan now. Inspect the real workspace, use tools when needed, obey every permission decision, and verify the result before summarizing.'
+    : '现在按计划继续执行。请检查真实工作区，按需调用工具，遵守所有权限决策，并在总结前验证结果。';
+}
+
 export function buildVerificationPrompt(language: 'zh-CN' | 'en-US'): string {
   if (language === 'en-US') {
     return 'Verify the work based on the conversation and tool results. Summarize what was checked, remaining risks, and next action if needed.';

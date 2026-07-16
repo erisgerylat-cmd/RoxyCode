@@ -38,13 +38,15 @@ const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_MAX_CONTEXT = 131_072;
 
 export class OpenAIProvider extends BaseLLMProvider {
-  readonly id = 'openai';
-  readonly name = 'OpenAI';
+  readonly id: string;
+  readonly name: string;
   readonly supportsTools = true;
   readonly maxContextTokens: number;
 
   constructor(config: LLMProviderConfig, retry?: Partial<RetryConfig>) {
     super(config, retry);
+    this.id = config.providerId === 'compatible' ? 'compatible' : 'openai';
+    this.name = this.id === 'compatible' ? 'OpenAI-compatible' : 'OpenAI';
     const modelInfo = OPENAI_MODELS[config.model];
     this.maxContextTokens = modelInfo?.maxContextTokens ?? DEFAULT_MAX_CONTEXT;
   }

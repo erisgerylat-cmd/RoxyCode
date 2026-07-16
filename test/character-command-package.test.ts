@@ -23,7 +23,7 @@ test('character package command lists package installs but ignores legacy single
 
     const source = join(root, 'source', 'roxy-sensei');
     await writeCharacterPackageFixture(source);
-    const characterManager = new CharacterManager(new ConfigManager(root), root);
+    const characterManager = new CharacterManager(new ConfigManager(root, root), root);
     await characterManager.loadCustomCharacters();
 
     let output = await captureConsole(() => handleCharacterCommand(['install', source], characterManager));
@@ -48,7 +48,7 @@ test('character package command reports incompatible engines without installing'
     await writeCharacterPackageFixture(source, {
       manifestPatch: { engines: { roxycode: '>=999.0.0' } },
     });
-    const characterManager = new CharacterManager(new ConfigManager(root), root);
+    const characterManager = new CharacterManager(new ConfigManager(root, root), root);
     await characterManager.loadCustomCharacters();
 
     const output = await captureConsole(() => handleCharacterCommand(['install', source], characterManager));
@@ -72,7 +72,7 @@ test('character package command surfaces validate errors and update install guid
         extensions: { hooks: 'behaviors/hooks.json' },
       },
     });
-    const characterManager = new CharacterManager(new ConfigManager(root), root);
+    const characterManager = new CharacterManager(new ConfigManager(root, root), root);
     await characterManager.loadCustomCharacters();
 
     let output = await captureConsole(() => handleCharacterCommand(['validate', source], characterManager));

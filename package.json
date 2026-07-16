@@ -1,29 +1,42 @@
 {
   "name": "roxycode",
   "version": "0.1.0",
-  "description": "RoxyCode — 洛琪希的魔法编程助手",
+  "description": "二次元可定制的中文 AI 编程工作台",
+  "packageManager": "pnpm@11.4.0",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
     "roxycode": "dist/index.js"
   },
+  "files": [
+    "dist",
+    "schemas",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsup src/index.ts --format esm",
+    "typecheck": "tsc --noEmit --pretty false",
+    "build": "tsup src/index.ts --format esm --clean --external typescript",
     "start": "node dist/index.js",
+    "install:global": "pnpm build && npm install --global .",
     "schema:characters": "tsx scripts/generate-character-schemas.ts",
-    "test": "node --import tsx --test test/*.test.ts"
+    "check:dead-code": "tsx scripts/check-source-reachability.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "check": "pnpm typecheck && pnpm check:dead-code && pnpm build && pnpm test"
   },
   "dependencies": {
     "adm-zip": "^0.5.18",
     "chalk": "^5.3.0",
+    "typescript": "^5.3.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
     "@types/node": "^20.0.0",
     "tsup": "^8.0.0",
-    "tsx": "^4.7.0",
-    "typescript": "^5.3.0"
+    "tsx": "^4.7.0"
   }
 }

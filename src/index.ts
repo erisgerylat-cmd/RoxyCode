@@ -6,6 +6,7 @@
  */
 
 import { CharacterManager } from './aesthetic/character/CharacterManager.js';
+import { parseCliArguments, renderCliHelp, resolveWorkspaceDirectory } from './cli/WorkspaceCli.js';
 import { ConfigManager } from './core/ConfigManager.js';
 import { APP_VERSION } from './core/constants.js';
 import { LLMFactory } from './engine/llm/LLMFactory.js';
@@ -17,6 +18,19 @@ import { REPL } from './ui/repl/REPL.js';
 import { showSplash } from './ui/splash/SplashRenderer.js';
 
 async function main() {
+  const launchOptions = parseCliArguments(process.argv.slice(2));
+  if (launchOptions.help) {
+    console.log(renderCliHelp(APP_VERSION));
+    return;
+  }
+  if (launchOptions.version) {
+    console.log(APP_VERSION);
+    return;
+  }
+
+  const workspace = await resolveWorkspaceDirectory(launchOptions.workspace, process.cwd());
+  process.chdir(workspace);
+
   const configManager = new ConfigManager();
   await configManager.load();
   const language = normalizeLanguage(configManager.get('ui.language'));

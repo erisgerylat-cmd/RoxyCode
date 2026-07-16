@@ -585,6 +585,31 @@ test('agent loop stops before model request when agent_start hook blocks', async
   }
 });
 
+test('standard mode adds a user continuation after planning for Claude-compatible gateways', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'roxy-agent-plan-continuation-'));
+  try {
+    const provider = new ScriptedProvider([
+      [
+        { type: 'text', text: '执行阶段完成，无需调用工具。' },
+        { type: 'done', usage: USAGE, toolCalls: [], finishReason: 'stop' },
+      ],
+    ], '## 目标\n完成测试计划');
+    const loop = createLoop({ cwd, provider });
+
+    for await (const _event of loop.run({ userInput: '完成一个无需修改文件的检查。', history: [], mode: 'standard' })) {
+      // Consume the full loop so planning, execution, and verification all run.
+    }
+
+    assert.equal(provider.streamCalls.length, 1);
+    const executionMessages = provider.streamCalls[0].messages;
+    assert.equal(executionMessages.at(-1)?.role, 'user');
+    assert.match(JSON.stringify(executionMessages.at(-1)?.content), /按计划继续执行/);
+    assert.ok(executionMessages.some(message => message.role === 'assistant' && JSON.stringify(message.content).includes('完成测试计划')));
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 function createLoop(options: {
   cwd: string;
   provider: ScriptedProvider;

@@ -29,9 +29,22 @@ test('built CLI handles core slash commands in non-interactive mode', { skip: !e
   }
 });
 
-function runCli(cwd: string, commands: string[]): Promise<string> {
+test('built CLI can select a workspace from another launch directory', { skip: !existsSync(DIST_ENTRY) ? 'Run pnpm run build before CLI smoke tests.' : false }, async () => {
+  const launchCwd = await mkdtemp(join(tmpdir(), 'roxy-cli-launch-'));
+  const workspace = await mkdtemp(join(tmpdir(), 'roxy-cli-workspace-'));
+  try {
+    const output = await runCli(launchCwd, ['/status', '/exit'], ['--cwd', workspace]);
+    assert.match(output, new RegExp(escapeRegExp(workspace), 'i'));
+    assert.doesNotMatch(output, /RoxyCode startup failed/);
+  } finally {
+    await rm(launchCwd, { recursive: true, force: true });
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+function runCli(cwd: string, commands: string[], args: string[] = []): Promise<string> {
   return new Promise((resolveOutput, reject) => {
-    const child = spawn(process.execPath, [DIST_ENTRY], {
+    const child = spawn(process.execPath, [DIST_ENTRY, ...args], {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: buildSmokeEnv(),
@@ -52,6 +65,11 @@ function runCli(cwd: string, commands: string[]): Promise<string> {
     child.stdin.end(commands.join('\n'));
   });
 }
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function buildSmokeEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of Object.keys(env)) {

@@ -97,7 +97,7 @@ test('character command lists marketplace packages', async () => {
       }],
     });
 
-    const manager = new CharacterManager(new ConfigManager(root), root);
+    const manager = new CharacterManager(new ConfigManager(root, root), root);
     await manager.loadCustomCharacters();
     const output = await captureConsole(() => handleCharacterCommand(['marketplace', 'list', marketplacePath], manager));
 

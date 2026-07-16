@@ -8,7 +8,7 @@ import {
   type ToolCall,
   type ToolResult,
 } from '../../core/types/message.js';
-import { buildAgentSystemPrompt, buildPlanPrompt, buildVerificationPrompt } from './prompts.js';
+import { buildAgentSystemPrompt, buildPlanContinuationPrompt, buildPlanPrompt, buildVerificationPrompt } from './prompts.js';
 import { loadRuntimeContext, renderRuntimeContext } from './RuntimeContext.js';
 import { getAgentModeSpec } from './modes.js';
 import type { AgentLoopEvent, AgentLoopOptions, AgentRunInput } from './types.js';
@@ -176,7 +176,10 @@ export class AgentLoop {
         profiler.mark('query_model_request_end', 'planning');
         totalUsage = addUsage(totalUsage, planResult.usage);
         yield { type: 'planning', text: planResult.text };
-        messages.push(assistantMessage(planResult.text));
+        messages.push(
+          assistantMessage(planResult.text),
+          userMessage(buildPlanContinuationPrompt(input.mode, this.options.language)),
+        );
       }
 
       if (spec.allowTools && this.options.llmProvider.supportsTools) {

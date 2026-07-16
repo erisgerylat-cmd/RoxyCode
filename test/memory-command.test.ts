@@ -14,7 +14,7 @@ test('memory review command approves queued automatic memories', async () => {
   const previousCwd = process.cwd();
   try {
     process.chdir(cwd);
-    const configManager = new ConfigManager(cwd);
+    const configManager = new ConfigManager(cwd, cwd);
     await configManager.load();
     const characterManager = new CharacterManager(configManager, cwd);
     const store = new MemoryStore({ cwd });

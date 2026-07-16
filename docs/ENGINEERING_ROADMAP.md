@@ -1,545 +1,160 @@
-# RoxyCode 工程能力提升计划
-> 对标 Claude Code，达到 80-90% 工程成熟度
+# RoxyCode 工程路线图
 
-## 📊 当前状态评估
+更新日期：2026-07-14
 
-### 整体完成度：87% → 目标：90%+
+## 产品定位
 
-| 维度 | Claude Code | RoxyCode 当前 | 目标 | 差距分析 |
-|---|---|---|---|---|
-| **核心引擎** | 100% | 98% | 100% | ✅ 接近完成，补齐细节 |
-| **工具系统** | 100% | 92% | 95% | ⚠️ 缺流式进度、并发标记 |
-| **命令系统** | 100% | 90% | 95% | ⚠️ 缺动态加载、热重载 |
-| **Hook系统** | 100% | 98% | 100% | ✅ 基本完备 |
-| **Memory系统** | 100% | 30% | 85% | 🔴 最大缺口 |
-| **MCP支持** | 100% | 95% | 97% | ✅ 多协议、OAuth、插件沙箱执行链已完成；keychain/SDK 兼容待增强 |
-| **配置管理** | 100% | 70% | 85% | ⚠️ 缺多层级、热重载 |
-| **Profile系统** | 100% | 30% | 80% | 🔴 核心缺失 |
-| **Workflow引擎** | 100% | 60% | 85% | 🔴 缺执行器 |
-| **Character系统** | 0% | 88% | 95% | ✅ RoxyCode特色 |
-| **测试覆盖** | 80%+ | 50% | 75% | ⚠️ 不均衡 |
+RoxyCode 是面向中文开发者的可深度定制 CLI 编程 Agent。工程体验参考 Claude Code 的成熟路径，但不追求功能数量上的机械复制。
 
----
+项目只保留三类核心价值：
 
-## 🎯 三阶段优化路线
+1. 可靠完成真实工作区开发任务。
+2. 为中文用户和 OpenAI-compatible 模型提供低理解成本的交互。
+3. 让角色真正影响解释、审查、风险偏好和工作流，而不是只替换主题。
 
-### Phase 1: 补齐核心缺口（P0，2-3周）
+架构约束：
 
-**目标**：Memory、Profile、Workflow 从占位符变为可用实现
+- 只有一条 Agent 执行链和一条 UI 事件消费链。
+- 工具统一经过 `ToolRegistry -> PermissionGuard -> ToolExecutor -> AuditLog`。
+- 角色、插件、Hook、MCP 和 Workflow 都不能绕过权限与事实验证。
+- 规划中的能力不提前建立无实现、无消费者的抽象接口。
+- README 只声明已有测试或可复现演示支持的能力。
 
-#### 1.1 Memory 系统实现 ✅ 核心完成
+## 当前基线
 
-**当前状态**：85% 完成度
-- ✅ 类型定义完整
-- ✅ MemoryStore 完整存储接口
-- ✅ 自动提取 agent 已实现
-- ✅ 智能召回已实现（TF-IDF top-5）
-- ✅ MEMORY.md 索引机制已实现（200 行限制）
-- ✅ 交叉引用 [[link]] 已实现
-- ✅ `loadIndex/saveMemory/listMemories/deleteMemory` 兼容接口已补齐
-
-**实施任务**：
-
-```typescript
-// Task 1: 实现 Memory Store (2天)
-src/session/memory/MemoryStore.ts
-  - loadIndex(): 解析 MEMORY.md
-  - saveMemory(): 保存单条记忆 + 更新索引
-  - listMemories(): 列出所有记忆
-  - deleteMemory(): 删除记忆
-
-src/session/memory/MemoryIndex.ts
-  - parseIndex(): 解析 MEMORY.md 格式
-  - updateIndex(): 维护 200 行限制
-  - buildIndexLine(): 生成索引行
-
-// Task 2: 智能召回 (2天)
-src/session/memory/MemoryRetriever.ts
-  - recallRelevant(query, limit): TF-IDF 相关性排序
-  - 后期升级：向量召回（可选）
-
-src/session/memory/MemoryGraph.ts
-  - parseCrossLinks(): 解析 [[name]] 语法
-  - getRelated(): 获取关联记忆
-
-// Task 3: 自动提取 (3天)
-src/session/memory/AutoMemoryExtractor.ts
-  - shouldExtract(): 判断是否需要提取（每 N 轮）
-  - extract(): Fork 子 agent，限制工具权限
-  - 只能写 .roxycode/memory/**
-  - 不能访问其他文件
-
-src/session/memory/MemoryPrompts.ts
-  - buildExtractionPrompt(): 提取指令模板
-
-// Task 4: 集成到 AgentLoop (1天)
-src/engine/agent/AgentLoop.ts
-  - 在 prepareSystemPrompt 中召回相关记忆
-  - 注入到 system prompt
-  - 标注新鲜度（>1天 → 可能过期）
-```
-
-**验收标准**：
-- [x] MEMORY.md 自动维护，200 行限制生效
-- [x] 根据 query 召回 top-5 相关记忆
-- [x] 每 10 轮触发自动提取
-- [x] 支持 [[cross-link]] 语法
-- [x] 6 种类型完整支持
-
-**完成度**：30% → 85%
-
----
-
-#### 1.2 Profile 系统实现 ✅ 核心完成
-
-**当前状态**：80% 完成度
-- ✅ 类型定义存在
-- ✅ ProfileManager 已实现
-- ✅ ProfileOnboarding 已实现
-- ✅ ProjectProfileManager 已实现
-- ✅ RoxyManifest 解析已实现
-- ✅ ProjectScanner 已实现
-- ✅ 首次启动引导已接入交互式 UI 启动流程
-
-**实施任务**：
-
-```typescript
-// Task 1: ProfileManager (2天)
-src/session/profile/ProfileManager.ts
-  - load(): 加载 .roxycode/profile.json
-  - save(): 保存用户画像
-  - update(): 增量更新
-  - getTechStack(): 技术栈偏好
-  - getWorkflowPreferences(): 工作流偏好
-
-src/session/profile/ProfileOnboarding.ts
-  - runOnboarding(): 引导用户完成画像
-  - detectTechStack(): 从项目自动识别
-  - suggestCharacter(): 推荐合适角色
-
-// Task 2: ProjectProfileManager (2天)
-src/session/project/ProjectProfileManager.ts
-  - load(): 加载 .roxycode/project.json
-  - scanProject(): 扫描项目类型
-  - getProjectType(): 识别框架（React/Vue/Next.js/...）
-  - getTestFramework(): 识别测试框架
-  - getLintConfig(): 识别 lint 配置
-
-src/session/project/RoxyManifest.ts
-  - parseRoxyMd(): 解析 ROXY.md
-  - extractInstructions(): 提取项目特定指令
-  - extractWorkflows(): 提取推荐工作流
-
-src/session/project/ProjectScanner.ts
-  - scanDependencies(): package.json 扫描
-  - detectFramework(): 框架识别
-  - detectLanguages(): 语言占比
-```
-
-**验收标准**：
-- [x] 首次启动触发 onboarding
-- [x] .roxycode/profile.json 正确保存
-- [x] .roxycode/project.json 自动生成
-- [x] ROXY.md 解析生效
-- [x] 项目类型自动识别
-
-**完成度**：30% → 80%
-
----
-
-#### 1.3 Workflow 执行引擎 ✅ 已完成
-
-**当前状态**：85% 完成度
-- ✅ WorkflowLoader 完整
-- ✅ Workflow 定义完备
-- ✅ WorkflowRunner 已实现
-- ✅ 独立执行引擎已实现
-- ✅ `/workflow run <name>` 已接入 WorkflowRunner
-- ✅ 支持变量、条件、循环、验证步骤和错误收集
-
-**实施任务**：
-
-```typescript
-// Task 1: WorkflowRunner (3天)
-src/workflow/WorkflowRunner.ts
-  - run(workflow): 执行完整工作流
-  - executeStep(step): 执行单步
-  - handleCondition(condition): 条件判断
-  - handleLoop(loop): 循环逻辑
-
-src/workflow/WorkflowExecutor.ts
-  - executePromptStep(): 执行 prompt 步骤
-  - executeToolStep(): 执行工具步骤
-  - executeAgentStep(): 启动子 agent
-
-src/workflow/WorkflowContext.ts
-  - variables: 变量存储
-  - state: 执行状态
-  - results: 步骤结果
-```
-
-**验收标准**：
-- [x] `/workflow run <name>` 可执行
-- [x] 支持条件、循环
-- [x] 支持变量传递
-- [x] 错误处理完善
-
-**完成度**：60% → 85%
-
----
-
-### Phase 2: 工具与命令系统增强 ✅ 已完成
-
-#### 2.1 工具系统流式化 ✅ 已完成
-
-**当前状态**：95% 完成度
-- ✅ `ToolStream` / `ToolStreamEvent` 已定义
-- ✅ `concurrencySafe` / `destructive` 静态标记已接入
-- ✅ read_file、execute_command、grep_search 等内置工具已支持流式进度
-- ✅ StreamingToolExecutor 已使用并发安全标记调度工具
-- ✅ MCP 工具适配器已映射 read-only/destructive/open-world 元数据
-
-**实施任务**：
-
-```typescript
-// 升级工具接口
-src/tool/types.ts
-  interface Tool {
-    name: string
-    concurrencySafe: boolean          // 新增
-    destructive: boolean              // 新增
-    execute: (args, context) => AsyncGenerator<ToolProgress, ToolResult>
-  }
-
-  type ToolProgress =
-    | { type: 'status'; message: string }
-    | { type: 'file_read'; path: string; size: number }
-    | { type: 'command_start'; cmd: string }
-    | { type: 'output_chunk'; text: string }
-
-// 升级内置工具
-src/tool/builtin/readFile.ts
-  - 改为 async generator
-  - yield { type: 'status', message: '读取文件...' }
-  - yield { type: 'file_read', path, size }
-
-src/tool/builtin/executeCommand.ts
-  - 改为 async generator
-  - yield { type: 'command_start', cmd }
-  - yield { type: 'output_chunk', text } for stdout
-
-src/tool/builtin/grepSearch.ts
-  - 改为 async generator
-  - yield 每个匹配结果
-```
-
-**验收标准**：
-- [x] 所有内置工具支持流式进度
-- [x] concurrencySafe 标记用于多 Agent
-- [x] destructive 影响权限判断
-
----
-
-#### 2.2 命令系统动态加载 ✅ 已完成
-
-**当前状态**：95% 完成度
-- ✅ WorkflowCommandSource 已实现
-- ✅ PluginCommandSource 已实现
-- ✅ SkillCommandSource 已实现
-- ✅ CommandLoader 聚合所有动态来源
-- ✅ CommandWatcher 支持开发模式热重载
-- ✅ CommandRegistry 支持动态注册、替换、注销
-
-**实施任务**：
-
-```typescript
-// 命令源抽象
-src/commands/sources/CommandSource.ts
-  interface CommandSource {
-    name: string
-    discover(): Promise<CommandDefinition[]>
-    watch?(): AsyncIterable<CommandDefinition[]>
-  }
-
-src/commands/sources/WorkflowCommandSource.ts
-  - 从 .roxycode/workflows/*.yml 生成命令
-  - /workflow-<name> → 执行对应工作流
-
-src/commands/sources/PluginCommandSource.ts
-  - 从插件注册表加载命令
-  - 动态注册/注销
-
-src/commands/sources/SkillCommandSource.ts
-  - 从 .roxycode/skills/*.md 加载
-  - 解析 frontmatter 生成命令
-
-src/commands/CommandLoader.ts
-  - 聚合所有 CommandSource
-  - 统一加载入口
-
-src/commands/CommandWatcher.ts
-  - 监听文件变化
-  - 热重载命令
-```
-
-**验收标准**：
-- [x] Workflow/Plugin/Skill 命令自动生成
-- [x] 热重载生效（开发模式）
-- [x] `/help` 显示所有来源命令
-
----
-
-### Phase 3: 扩展性与稳定性 ✅ 核心完成
-
-#### 3.1 MCP 协议扩展 ✅ 核心完成
-
-**当前状态**：95% 完成度
-- ✅ 支持 stdio、sse、http、streamable-http、ws、websocket 六种传输配置
-- ✅ OAuth PKCE 流程已实现
-- ✅ TokenStore 已实现可替换 backend 和本地 JSON 持久化
-- ✅ 插件 MCP server 已接入 `${ROXY_PLUGIN_ROOT}`/`${ROXY_PLUGIN_ID}` 变量解析、stdio 路径沙箱和远程网络权限检查
-- ⚠️ 系统 keychain 后端作为后续安全增强项保留
-
-```typescript
-// 传输层抽象
-src/mcp/transports/Transport.ts
-src/mcp/transports/StdioTransport.ts    // 重构现有
-src/mcp/transports/SSETransport.ts      // 新增
-src/mcp/transports/HTTPTransport.ts     // 新增
-src/mcp/transports/WebSocketTransport.ts // 新增
-
-// OAuth 支持
-src/mcp/auth/OAuthFlow.ts
-  - startPKCE(): 启动 PKCE 流程
-  - handleCallback(): 处理回调
-  - refreshToken(): 刷新 token
-
-src/mcp/auth/TokenStore.ts
-  - 系统 keychain 存储
-  - 跨平台支持
-```
-
-**验收标准**：
-- [x] 支持 6 种传输协议
-- [x] OAuth 流程完整
-- [x] TokenStore 可用（后续升级系统 keychain）
-- [x] 插件 MCP server 不能绕过插件沙箱边界
-
----
-
-#### 3.2 配置管理增强 ✅ 核心完成
-
-**当前状态**：85% 完成度
-- ✅ default/global/project/local/env/session 多层配置优先级生效
-- ✅ configSchema 运行时校验和错误来源定位已实现
-- ✅ `.roxycode/config.local.json` 自动 gitignore
-- ⚠️ 文件 watcher 热重载可作为后续增强继续完善
-
-```typescript
-// 多层级配置
-src/core/ConfigManager.ts
-  type ConfigLayer =
-    | 'defaults'
-    | 'global'         // ~/.roxycode/config.json
-    | 'profile'        // ~/.roxycode/profile.json
-    | 'project'        // .roxycode/config.json
-    | 'local'          // .roxycode/config.local.json (gitignored)
-    | 'cli'            // --config flag
-
-  class ConfigManager {
-    private layers: Map<ConfigLayer, Config>
-    private schema: ZodSchema
-    private watcher: FSWatcher
-
-    async load(): Promise<Config>
-    validate(config: unknown): Config
-    watch(): void  // 热重载
-  }
-
-// Zod Schema
-src/core/ConfigSchema.ts
-  - 完整配置 schema
-  - 验证所有字段
-```
-
-**验收标准**：
-- [x] 多层配置优先级生效
-- [x] 运行时 schema 验证
-- [ ] 配置文件变化自动热重载
-
----
-
-#### 3.3 Character 系统补齐 ✅ 已完成
-
-**当前状态**：95% 完成度
-- ✅ 角色包 CLI 命令完整可用
-- ✅ Validator/Packer/Template/Exporter 工具链可用
-- ✅ 当前角色包 workflows 已接入 WorkflowLoader、`/workflow` 和动态命令
-- ✅ 当前角色包 hooks 已接入 HookLoader
-- ✅ 当前角色包 prompts 已通过 CharacterPromptLoader 注入 Agent runtimeContext
-
-```typescript
-// 角色包 CLI 集成
-src/commands/builtin/character.ts
-  - /character packages          // 列出已安装包
-  - /character install <path>    // 安装包
-  - /character uninstall <name>  // 卸载包
-  - /character update <path>     // 更新包
-  - /character validate <path>   // 校验包
-  - /character pack <dir>        // 打包
-  - /character export <id>       // 导出
-
-// 角色包工具链
-src/aesthetic/character/custom/CharacterPackageValidator.ts
-src/aesthetic/character/custom/CharacterPackagePacker.ts
-src/aesthetic/character/custom/CharacterPackageTemplate.ts
-
-// 扩展能力接入运行时
-src/workflow/sources/CharacterWorkflowSource.ts
-  - 从角色包加载 workflows
-  - 注册到 workflow registry
-
-src/hooks/sources/CharacterHookSource.ts
-  - 从角色包加载 hooks
-  - 只启用当前角色的 hooks
-
-src/aesthetic/character/CharacterPromptLoader.ts
-  - 加载角色包自定义 prompts
-  - 合并到 system prompt
-```
-
-**验收标准**：
-- [x] CLI 命令完整可用
-- [x] 角色包扩展能力生效
-- [x] 打包/导出工具链可用
-
----
-
-## 📈 完成度提升路径
+已经形成的主闭环：
 
 ```text
-当前状态 (87%)
-    ↓
-Phase 1 完成 (90%)
-  - Memory: 30% → 85%
-  - Profile: 30% → 80%
-  - Workflow: 60% → 85%
-    ↓
-Phase 2 完成 (92%)
-  - 工具系统: 92% → 95%
-  - 命令系统: 90% → 95%
-    ↓
-Phase 3 完成 (93%)
-  - MCP: 95% → 97%
-  - 配置: 70% → 85%
-  - Character: 88% → 95%
-    ↓
-测试补齐 (95%)
-  - 测试覆盖: 50% → 75%
+用户任务
+  -> Agent Loop 分析与计划
+  -> 模型流式响应和 tool call
+  -> 权限确认与工具执行
+  -> 文件修改、诊断和测试
+  -> tool result 回传模型
+  -> 中文总结和恢复建议
 ```
 
----
+现有能力包括：
 
-## 🎯 关键成功指标
+- Lite、Economic、Standard、Ultimate 四档运行模式。
+- 文件、搜索、Shell、Git 工具及流式进度。
+- Plan Mode、TodoWrite、LSP 诊断和 Worktree 隔离。
+- JSONL 会话、上下文压缩、Memory 召回与自动记忆审核。
+- Workflow、MCP、Hooks、Plugin 扩展基础。
+- 角色行为、角色包工具链、RoxyStore 下载与完整性校验。
+- 中英文界面和多家 OpenAI-compatible Provider。
 
-### 功能完整性
+质量门禁：
 
-| 模块 | 当前 | 目标 | 验收标准 |
-|---|---|---|---|
-| Memory | 30% | 85% | 自动提取、智能召回、交叉引用 |
-| Profile | 30% | 80% | Onboarding、项目扫描、ROXY.md |
-| Workflow | 60% | 85% | 独立执行引擎、条件循环 |
-| 工具流式 | 0% | 95% | 所有工具支持进度反馈 |
-| 命令动态 | 50% | 95% | Workflow/Plugin/Skill 自动加载 |
-| MCP 协议 | 95% | 97% | 6 种传输 + OAuth + 插件沙箱执行链 |
-| Character CLI | 60% | 95% | 完整包管理命令 |
+```bash
+pnpm typecheck
+pnpm build
+pnpm test
+```
 
-### 工程质量
+## P0：把真实开发体验做顺
 
-| 维度 | 当前 | 目标 |
-|---|---|---|
-| 测试覆盖率 | 50% | 75% |
-| 核心模块测试 | 60% | 90% |
-| 端到端测试 | 30% | 60% |
-| 文档完整性 | 70% | 85% |
+目标：用户输入“实现一个功能”后，能稳定经历定位、修改、验证和总结，而不是停留在问答模式。
 
----
+### 1. 端到端任务评测
 
-## ⏱️ 时间安排
+- 建立 TypeScript、Java、Vue 三类固定任务集。
+- 记录任务完成率、工具失败率、权限拒绝恢复率、平均工具轮数和输出长度。
+- 每个核心版本至少回归：读文件、编辑文件、创建文件、运行测试、失败修复。
+- 将“测试通过但需求未完成”与“代码正确但越权”视为失败。
 
-### Week 1-2: Phase 1 核心缺口
-- Day 1-2: Memory Store + Index
-- Day 3-4: Memory Retriever + Graph
-- Day 5-7: Auto Extractor
-- Day 8-9: ProfileManager
-- Day 10-11: ProjectProfileManager
-- Day 12-14: WorkflowRunner
+验收：固定任务可重复运行，结果能够比较，而不是只依赖人工体验。
 
-### Week 3: Phase 2 工具命令
-- Day 15-16: 工具流式化
-- Day 17-18: 命令动态加载
-- Day 19-21: 测试补齐
+### 2. 工具调用稳定性
 
-### Week 4: Phase 3 扩展稳定
-- Day 22-23: MCP 协议扩展
-- Day 24-25: 配置管理增强
-- Day 26-28: Character 系统补齐
+- 统一大结果压缩、截断和外部存储策略。
+- 为 edit_file 增加更多冲突恢复和最小 diff 场景测试。
+- 完善长命令、取消、超时和进程树清理。
+- 让每次失败都提供可执行恢复动作。
 
----
+验收：常见工具失败不会直接终止整轮 Agent Loop。
 
-## 🚀 下一步行动
+### 3. 首次使用体验
 
-### 立即开始（本周）
+- 将 `/profile init`、`/project init`、模型配置和项目诊断串成一次引导。
+- 自动检测 Node、Java、Vue、Git、LSP 和测试命令。
+- 明确区分“未配置”“配置错误”“网络错误”“模型不支持工具调用”。
 
-1. **Memory 系统**
-   - [x] 实现 MemoryStore.loadIndex()
-   - [x] 实现 MemoryIndex.parseIndex()
-   - [x] 集成到 AgentLoop
+验收：新用户能在十分钟内完成首次真实文件修改。
 
-2. **Profile 系统**
-   - [x] 实现 ProfileManager.load()
-   - [x] 实现 ProfileOnboarding
-   - [x] 首次启动引导
+## P1：强化 RoxyCode 差异化
 
-3. **Workflow 引擎**
-   - [x] 实现 WorkflowRunner.run()
-   - [x] 实现 WorkflowExecutor
-   - [x] `/workflow run` 命令
+目标：角色与中文体验成为可验证的行为能力，而不是装饰层。
 
-### 短期目标（2周内）
+### 1. 角色行为契约
 
-- Memory、Profile、Workflow 从占位符变为可用
-- 测试覆盖率提升到 60%+
-- 完成 Phase 1 核心缺口补齐
+- 定义解释深度、审查重点、风险偏好、计划风格的稳定覆盖规则。
+- 建立相同任务在 teacher、reviewer、companion 角色下的快照测试。
+- 角色提示只能补充核心 system prompt，不能覆盖安全策略。
+- UI 台词控制频率，避免干扰高密度开发输出。
 
-### 中期目标（4周内）
+验收：不同角色对同一任务产生可解释、可测试的行为差异。
 
-- 工具系统流式化完成
-- 命令系统动态加载完成
-- Character 系统完整闭环
-- 整体完成度达到 93%+
+### 2. 中文与模型兼容层
 
----
+- 为 Qwen、DeepSeek、GLM 和通用兼容接口建立 tool call 契约测试。
+- 统一处理工具参数缺失、字符串化 JSON、重复 tool call 和 tool result 配对错误。
+- 中文错误提示同时保留 provider、request id、重试建议等工程信息。
+- 将解释深度与输出预算联动，避免“教学模式”等于无限长输出。
 
-## 📝 总结
+验收：至少三类兼容接口通过同一套核心工具调用用例。
 
-**当前优势**：
-- ✅ Agent Loop 架构完整（98%）
-- ✅ Hook 系统成熟（98%）
-- ✅ 会话管理完善（95%）
-- ✅ Character 系统特色鲜明（88%）
+### 3. 角色包与 RoxyStore 闭环
 
-**核心缺口**：
-- 🔴 Memory 系统（30% → 85%）
-- 🔴 Profile 系统（30% → 80%）
-- 🔴 Workflow 引擎（60% → 85%）
+- 固化搜索、下载、SHA-256 校验、安装、更新、回滚流程。
+- 为扩展 prompts、workflows、hooks 分别声明权限边界。
+- 增加来源、签名、兼容版本和风险摘要展示。
+- 保持 legacy 单文件角色兼容，但不再扩展其能力。
 
-**实施路径**：
-1. **Phase 1**：补齐 Memory/Profile/Workflow（P0）
-2. **Phase 2**：增强工具/命令系统（P1）
-3. **Phase 3**：扩展 MCP/配置/Character（P1-P2）
+验收：商店角色包能够在不重启 CLI 的情况下安装并切换，失败时不污染现有角色。
 
-**预期结果**：
-- 4 周后整体完成度：**93%+**
-- 达到 Claude Code **80-90%** 工程能力
-- RoxyCode 特色（Character）保持并增强
+## P1：工程质量与安全
+
+### 1. 单一运行内核
+
+- 不新增第二套 Agent event、renderer、permission pipeline 或 session store。
+- 新 UI 能力接入当前 `REPL -> InteractionRenderer/ToolActivityRenderer` 路径。
+- 新工具必须声明只读、并发安全和破坏性元数据。
+
+### 2. 扩展安全
+
+- Plugin、Hook、MCP 保持默认最小权限。
+- 网络、进程、工作区外路径和环境变量访问需要显式声明。
+- 安装包解压继续限制路径、文件数、单文件大小和总大小。
+- 对扩展运行记录来源、权限决策和失败原因。
+
+### 3. 发布准备
+
+- 固定 Node 最低版本和 npm 包文件白名单。
+- 建立安装后 smoke test，而不只测试源码运行。
+- 增加 changelog、版本迁移说明和配置兼容测试。
+- 发布前执行 `pnpm check` 和角色 schema 生成一致性检查。
+
+## P2：高级能力
+
+这些能力只有在 P0/P1 指标稳定后推进：
+
+- Memory 混合召回和可选向量索引。
+- Ultimate 模式的冲突自动合并与成本预算。
+- Vue、Java LSP 的标准化诊断适配。
+- Plugin SDK、签名与受信发布源。
+- 跨设备 Profile/Memory 同步。
+
+不提前为这些功能保留无实现接口；确定进入迭代后再从真实调用方抽象。
+
+## 迭代规则
+
+每个任务必须包含：
+
+1. 用户场景和失败边界。
+2. 与当前执行链的接入点。
+3. 自动化测试或可重复演示。
+4. 中文和英文文案。
+5. 权限、隐私、成本与回滚影响。
+
+对照 Claude Code 时，优先学习它的单一执行路径、权限不可绕过、流式反馈和恢复能力。RoxyCode 的优化空间集中在中文解释、国产模型兼容、角色行为契约和创作者生态，不为“看起来完整”保留没有运行价值的模块。

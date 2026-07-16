@@ -85,6 +85,7 @@ export interface LLMProviderConfig {
   apiKey: string;
   baseUrl?: string;
   model: string;
+  providerId?: string;
   fallbackModels?: string[];
   temperature?: number;
   topP?: number;

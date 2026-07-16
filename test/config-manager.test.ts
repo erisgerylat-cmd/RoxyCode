@@ -24,13 +24,14 @@ test('local config overrides project config and reports source paths', async () 
       llm: { model: 'local-model' },
     });
 
-    const manager = new ConfigManager(env.cwd);
+    const manager = new ConfigManager(env.cwd, env.home);
     await manager.load();
 
     assert.equal(manager.get('ui.language'), 'zh-CN');
     assert.equal(manager.get('llm.model'), 'local-model');
 
     const paths = manager.getPaths();
+    assert.equal(paths.global, join(env.home, '.roxycode', 'config.json'));
     assert.equal(paths.local, join(env.cwd, '.roxycode', 'config.local.json'));
 
     const languageSource = manager.getSource('ui.language');
@@ -56,7 +57,7 @@ test('invalid local config reports the local file without applying it', async ()
       ui: { aestheticMode: 'maximal' },
     });
 
-    const manager = new ConfigManager(env.cwd);
+    const manager = new ConfigManager(env.cwd, env.home);
     await manager.load();
 
     assert.equal(manager.get('ui.aestheticMode'), 'minimal');
@@ -72,7 +73,7 @@ test('invalid local config reports the local file without applying it', async ()
 test('setting local config writes config.local.json and gitignores it', async () => {
   const env = await createConfigTestEnv();
   try {
-    const manager = new ConfigManager(env.cwd);
+    const manager = new ConfigManager(env.cwd, env.home);
     await manager.load();
 
     await manager.set('llm.model', 'gpt-5.5', { scope: 'local' });
@@ -91,25 +92,17 @@ test('setting local config writes config.local.json and gitignores it', async ()
   }
 });
 
-async function createConfigTestEnv(): Promise<{ cwd: string; cleanup: () => Promise<void> }> {
+async function createConfigTestEnv(): Promise<{ cwd: string; home: string; cleanup: () => Promise<void> }> {
   const root = await mkdtemp(join(tmpdir(), 'roxy-config-test-'));
   const cwd = join(root, 'workspace');
   const home = join(root, 'home');
   await mkdir(cwd, { recursive: true });
   await mkdir(home, { recursive: true });
 
-  const previousHome = process.env.HOME;
-  const previousUserProfile = process.env.USERPROFILE;
-  process.env.HOME = home;
-  process.env.USERPROFILE = home;
-
   return {
     cwd,
+    home,
     cleanup: async () => {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
-      else process.env.USERPROFILE = previousUserProfile;
       await rm(root, { recursive: true, force: true });
     },
   };

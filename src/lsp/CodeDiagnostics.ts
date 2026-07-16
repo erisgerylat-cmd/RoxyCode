@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { LSPClient } from './LSPClient.js';
 import type { Language } from '../i18n/index.js';
@@ -178,14 +178,19 @@ async function resolveDiagnosticTargets(cwd: string, input: CodeDiagnosticsRunne
     .map(file => normalizeTargetPath(cwd, file))
     .filter(file => isTypeScriptDiagnosticPath(file));
   const hasExplicitTargets = explicit.length > 0;
-  const tsconfigPath = join(cwd, 'tsconfig.json');
-  const hasTypeScriptProject = existsSync(tsconfigPath);
+  const rootTsconfigPath = join(cwd, 'tsconfig.json');
+  let hasTypeScriptProject = existsSync(rootTsconfigPath);
   const files = uniquePaths(explicit);
   if (files.length === 0 && !hasTypeScriptProject) {
     files.push(...await discoverTypeScriptFiles(cwd, DISCOVERY_LIMIT));
   }
   if (files.length === 0 && hasTypeScriptProject) {
     notes.push('TypeScript project detected through tsconfig.json; compiler diagnostics will use project rootNames.');
+  }
+  const nestedTsconfig = resolveCompilerTsconfig(cwd, files);
+  if (!hasTypeScriptProject && nestedTsconfig) {
+    hasTypeScriptProject = true;
+    notes.push(`Nested TypeScript project detected: ${relativePath(cwd, nestedTsconfig)}.`);
   }
   return {
     typeScriptFiles: files,
@@ -239,7 +244,7 @@ async function runTypeScriptCompilerDiagnostics(input: {
   started: number;
 }): Promise<CodeDiagnosticsReport> {
   const ts = await import('typescript');
-  const tsconfigPath = join(input.cwd, 'tsconfig.json');
+  const tsconfigPath = resolveCompilerTsconfig(input.cwd, input.files);
   let rootNames: string[] = [];
   let options: import('typescript').CompilerOptions = {
     noEmit: true,
@@ -251,7 +256,7 @@ async function runTypeScriptCompilerDiagnostics(input: {
   };
   const notes: string[] = [];
 
-  if (existsSync(tsconfigPath)) {
+  if (tsconfigPath) {
     const configFile = ts.readConfigFile(tsconfigPath, path => ts.sys.readFile(path));
     if (configFile.error) {
       const diagnostic = mapTsDiagnostic(input.cwd, ts, configFile.error);
@@ -266,10 +271,11 @@ async function runTypeScriptCompilerDiagnostics(input: {
         notes: ['tsconfig.json could not be parsed.'],
       });
     }
-    const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, input.cwd);
+    const configDirectory = dirname(tsconfigPath);
+    const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, configDirectory);
     rootNames = parsed.fileNames;
     options = { ...parsed.options, noEmit: true };
-    notes.push('Diagnostics were collected through the TypeScript compiler API using tsconfig.json.');
+    notes.push(`Diagnostics were collected through the TypeScript compiler API using ${relativePath(input.cwd, tsconfigPath)}.`);
   } else {
     rootNames = input.files.length > 0 ? input.files : await discoverTypeScriptFiles(input.cwd, DISCOVERY_LIMIT);
     notes.push('No tsconfig.json was found; diagnostics used discovered TypeScript/JavaScript files with conservative compiler options.');
@@ -310,6 +316,34 @@ async function runTypeScriptCompilerDiagnostics(input: {
     started: input.started,
     notes,
   });
+}
+
+function resolveCompilerTsconfig(cwd: string, files: string[]): string | null {
+  const rootConfig = join(cwd, 'tsconfig.json');
+  if (existsSync(rootConfig)) return rootConfig;
+
+  const configs = new Set<string>();
+  for (const file of files) {
+    let directory = dirname(resolve(file));
+    while (isWithinWorkspace(cwd, directory)) {
+      const candidate = join(directory, 'tsconfig.json');
+      if (existsSync(candidate)) {
+        configs.add(candidate);
+        break;
+      }
+      if (directory === resolve(cwd)) break;
+      const parent = dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+    if (configs.size > 1) return null;
+  }
+  return configs.values().next().value ?? null;
+}
+
+function isWithinWorkspace(cwd: string, target: string): boolean {
+  const rel = relative(resolve(cwd), resolve(target));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 async function resolveTypeScriptLanguageServer(cwd: string): Promise<{ command: string; args: string[] }> {

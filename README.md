@@ -10,9 +10,10 @@ RoxyCode 的目标不是做 Claude Code 的简单中文外壳，而是把 Claude
 
 已验证：
 
-- `pnpm exec tsc --noEmit --pretty false`
+- `pnpm typecheck`
+- `pnpm check:dead-code`
 - `pnpm run build`
-- `pnpm test`：130 passed，2 skipped，0 failed
+- `pnpm test`：170 passed，2 skipped，0 failed
 
 ## 与 Claude Code 的对照
 
@@ -38,6 +39,21 @@ pnpm run build
 pnpm start
 ```
 
+首次在本机开发安装后，可以创建全局命令：
+
+```bash
+pnpm install:global
+```
+
+之后无需进入 RoxyCode 源码目录，可以在任意终端指定要操作的项目：
+
+```powershell
+roxycode D:\Projects\my-app
+roxycode --cwd D:\Projects\my-app
+```
+
+在目标项目终端中也可以直接运行 `roxycode .`。RoxyCode 会在加载配置、权限、工具、会话和 Memory 之前切换工作区，所有文件操作仍受项目边界限制。
+
 开发模式：
 
 ```bash
@@ -49,6 +65,7 @@ pnpm run dev
 ```bash
 pnpm run build
 pnpm test
+pnpm check
 ```
 
 ## API 配置
@@ -281,6 +298,7 @@ src/
 - [Ultimate 多 Agent](docs/MULTI_AGENT_ULTIMATE_MODE.md)
 - [工程级 Agent 设计总结](docs/ENGINEERING_AGENT_DESIGN_SUMMARY.md)
 - [工程路线图](docs/ENGINEERING_ROADMAP.md)
+- [简历项目学习路线](docs/RESUME_PROJECT_LEARNING_PATH.md)
 
 ## 开发约定
 
