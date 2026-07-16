@@ -298,7 +298,7 @@ src/
 - [Ultimate 多 Agent](docs/MULTI_AGENT_ULTIMATE_MODE.md)
 - [工程级 Agent 设计总结](docs/ENGINEERING_AGENT_DESIGN_SUMMARY.md)
 - [工程路线图](docs/ENGINEERING_ROADMAP.md)
-- [简历项目学习路线](docs/RESUME_PROJECT_LEARNING_PATH.md)
+- [RoxyCode 完整项目学习手册](docs/RESUME_PROJECT_LEARNING_PATH.md)
 
 ## 开发约定
 
